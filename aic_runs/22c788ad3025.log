@@ -138,16 +138,19 @@ Route lap 2: executing warehouse pickup and dispatch path
   driving through lower aisle
   approaching StorageR
   pickup ProductR
+pick_up product=ProductR storage=StorageR slot=(6.55, -4.2, 1.02)
+  crossing central aisle
+  approaching StorageG
+  pickup ProductG
+  turning toward dispatch
+  driving to DispatchB
   dropoff at DispatchB
 drop_off product=ProductR dispatch=DispatchB target=(-8.0, 4.0, 0.28)
   returning to standby
-Route lap 4: executing warehouse pickup and dispatch path
+Route lap 3: executing warehouse pickup and dispatch path
   leaving dispatch area
   driving through lower aisle
   approaching StorageR
   pickup ProductR
 pick_up product=ProductR storage=StorageR slot=(6.55, -4.2, 1.02)
   crossing central aisle
-  approaching StorageG
-  pickup ProductG
-  turning toward dispatch
