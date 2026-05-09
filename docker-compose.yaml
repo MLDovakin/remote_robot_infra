@@ -1,0 +1,28 @@
+name: aic-remote
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/aic_web/Dockerfile
+    image: aic-remote-web:latest
+    platform: ${AIC_PLATFORM:-linux/amd64}
+    shm_size: "4gb"
+    security_opt:
+      - seccomp:unconfined
+    ports:
+      - "${AIC_WEB_PORT:-8080}:8080"
+      - "${AIC_VNC_PORT:-6080}:6080"
+    environment:
+      DISPLAY: ":1"
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      QT_X11_NO_MITSHM: "1"
+      AIC_SCREEN: "1600x900x24"
+      AIC_RESULTS_DIR: /workspace/aic_results
+      AIC_RUNS_DIR: /workspace/aic_runs
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
+    volumes:
+      - ./aic_results:/workspace/aic_results
+      - ./aic_runs:/workspace/aic_runs
+    restart: unless-stopped

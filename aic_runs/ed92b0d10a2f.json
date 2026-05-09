@@ -1,0 +1,11 @@
+{
+  "command": [
+    "python3",
+    "/opt/aic_web/warehouse_policy.py"
+  ],
+  "created_at": "2026-05-09 11:30:38",
+  "id": "ed92b0d10a2f",
+  "kind": "warehouse_policy",
+  "returncode": null,
+  "status": "running"
+}

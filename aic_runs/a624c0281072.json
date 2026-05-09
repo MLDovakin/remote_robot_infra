@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/entrypoint.sh",
+    "gazebo_gui:=true",
+    "launch_rviz:=true",
+    "ground_truth:=false",
+    "start_aic_engine:=false",
+    "shutdown_on_aic_engine_exit:=false",
+    "model_discovery_timeout_seconds:=600"
+  ],
+  "created_at": "2026-05-09 11:29:30",
+  "finished_at": "2026-05-09 11:30:38",
+  "id": "a624c0281072",
+  "kind": "visual_only",
+  "returncode": -15,
+  "status": "failed"
+}

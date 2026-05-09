@@ -1,0 +1,12 @@
+.git
+.pixi
+build
+install
+log
+aic_results
+aic_runs
+*.zip
+*.tar
+*.tar.gz
+__pycache__
+*.pyc

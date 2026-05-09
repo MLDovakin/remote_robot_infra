@@ -1,0 +1,12 @@
+{
+  "command": [
+    "python3",
+    "/opt/aic_web/warehouse_visual.py"
+  ],
+  "created_at": "2026-05-09 15:08:07",
+  "finished_at": "2026-05-09 15:12:36",
+  "id": "40b2eaea01df",
+  "kind": "warehouse_visual",
+  "returncode": 0,
+  "status": "finished"
+}

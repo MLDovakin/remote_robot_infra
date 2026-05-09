@@ -1,0 +1,139 @@
+{
+  "robot": {
+    "name": "amr_1",
+    "pose": {
+      "x": 2,
+      "y": 3,
+      "yaw": "N"
+    },
+    "cargo_capacity": 8,
+    "cargo": [],
+    "state": "IDLE",
+    "battery": 79.65999999999923,
+    "active_order": null
+  },
+  "completed_orders": [
+    {
+      "id": "ORD-001",
+      "dispatch": "DispatchA",
+      "items": {
+        "ProductR": 2,
+        "ProductG": 1
+      },
+      "status": "completed"
+    },
+    {
+      "id": "ORD-002",
+      "dispatch": "DispatchB",
+      "items": {
+        "ProductB": 2,
+        "ProductR": 1
+      },
+      "status": "completed"
+    },
+    {
+      "id": "ORD-003",
+      "dispatch": "DispatchA",
+      "items": {
+        "ProductG": 2,
+        "ProductB": 1
+      },
+      "status": "completed"
+    }
+  ],
+  "dispatches": {
+    "DispatchA": {
+      "name": "DispatchA",
+      "pose": {
+        "x": 2,
+        "y": 3,
+        "yaw": "E"
+      },
+      "received": [
+        {
+          "product": "ProductR",
+          "source": "StorageR"
+        },
+        {
+          "product": "ProductR",
+          "source": "StorageR"
+        },
+        {
+          "product": "ProductG",
+          "source": "StorageG"
+        },
+        {
+          "product": "ProductG",
+          "source": "StorageG"
+        },
+        {
+          "product": "ProductG",
+          "source": "StorageG"
+        },
+        {
+          "product": "ProductB",
+          "source": "StorageB"
+        }
+      ]
+    },
+    "DispatchB": {
+      "name": "DispatchB",
+      "pose": {
+        "x": 2,
+        "y": 8,
+        "yaw": "E"
+      },
+      "received": [
+        {
+          "product": "ProductB",
+          "source": "StorageB"
+        },
+        {
+          "product": "ProductB",
+          "source": "StorageB"
+        },
+        {
+          "product": "ProductR",
+          "source": "StorageR"
+        }
+      ]
+    }
+  },
+  "storages": {
+    "StorageR": {
+      "name": "StorageR",
+      "product": "ProductR",
+      "pose": {
+        "x": 14,
+        "y": 2,
+        "yaw": "E"
+      },
+      "inventory": 1,
+      "capacity": 10
+    },
+    "StorageG": {
+      "name": "StorageG",
+      "product": "ProductG",
+      "pose": {
+        "x": 14,
+        "y": 5,
+        "yaw": "E"
+      },
+      "inventory": 1,
+      "capacity": 10
+    },
+    "StorageB": {
+      "name": "StorageB",
+      "product": "ProductB",
+      "pose": {
+        "x": 14,
+        "y": 8,
+        "yaw": "E"
+      },
+      "inventory": 1,
+      "capacity": 10
+    }
+  },
+  "steps": 134,
+  "trace_file": "warehouse_trace.json"
+}

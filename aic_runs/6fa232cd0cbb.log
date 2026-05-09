@@ -1,0 +1,7 @@
+$ source /ws_aic/install/setup.bash && ros2 topic list
+
+[2m2026-05-08T21:19:02.644181Z[0m [33m WARN[0m ThreadId(06) [2mzenoh::net::runtime::orchestrator[0m[2m:[0m Scouting delay elapsed before start conditions are met.
+[WARN] [1778275142.651444551] [rmw_zenoh_cpp]: Unable to connect to a Zenoh router. Have you started a router with `ros2 run rmw_zenoh_cpp rmw_zenohd`?
+[WARN] [1778275142.655567010] [rmw_zenoh_cpp]: Unable to connect to a Zenoh router after 1 attempt(s). Please ensure that a Zenoh router is running and can be reached. You may increase the number of attempts to check for a router by setting the ZENOH_ROUTER_CHECK_ATTEMPTS environment variable. Proceeding with initialization but other peers will not discover or receive data from peers in this session until a router is started.
+/parameter_events
+/rosout

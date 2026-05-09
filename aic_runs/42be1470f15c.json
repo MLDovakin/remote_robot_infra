@@ -1,0 +1,14 @@
+{
+  "command": [
+    "python3",
+    "/opt/aic_web/warehouse_sim.py",
+    "--sleep",
+    "0.04"
+  ],
+  "created_at": "2026-05-08 20:21:11",
+  "finished_at": "2026-05-08 20:21:17",
+  "id": "42be1470f15c",
+  "kind": "warehouse_demo",
+  "returncode": 0,
+  "status": "finished"
+}
