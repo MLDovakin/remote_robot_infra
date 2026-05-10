@@ -28,10 +28,16 @@ RESOLUTION = 0.10
 GRID_W = int(WIDTH_M / RESOLUTION)
 GRID_H = int(HEIGHT_M / RESOLUTION)
 ROBOT_RADIUS = 0.65
+WHEEL_RADIUS = 0.17
+WHEEL_SEPARATION = 0.92
+WHEEL_BASE = 0.72
+WHEEL_Z = 0.30
+MOTOR_LOG_INTERVAL_STEPS = 12
 
 HIDDEN_Z = -10.0
 STEP_SECONDS = 0.035
 LINEAR_SPEED = 2.2
+MAX_ANGULAR_SPEED = 2.5
 POSE_COMMAND_TIMEOUT_SECONDS = 2.0
 GZ_SERVICE_TIMEOUT_MS = 1500
 TASK_POLL_SECONDS = 0.4
@@ -46,6 +52,19 @@ class Pose2D:
     x: float
     y: float
     yaw: float = 0.0
+
+
+@dataclass
+class WheelCommand:
+    linear: float
+    angular: float
+    left_velocity: float
+    right_velocity: float
+    left_angular_velocity: float
+    right_angular_velocity: float
+    left_angle: float
+    right_angle: float
+    steering_angle: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -148,6 +167,48 @@ def normalize_angle(angle):
     while angle < -math.pi:
         angle += 2.0 * math.pi
     return angle
+
+
+def quaternion_from_euler(roll, pitch, yaw):
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    return {
+        "x": sr * cp * cy - cr * sp * sy,
+        "y": cr * sp * cy + sr * cp * sy,
+        "z": cr * cp * sy - sr * sp * cy,
+        "w": cr * cp * cy + sr * sp * sy,
+    }
+
+
+def transform_body_to_world(pose, local_x, local_y):
+    c = math.cos(pose.yaw)
+    s = math.sin(pose.yaw)
+    return pose.x + c * local_x - s * local_y, pose.y + s * local_x + c * local_y
+
+
+def motor_command(linear, angular, wheel_angles, dt):
+    left_velocity = linear - angular * WHEEL_SEPARATION * 0.5
+    right_velocity = linear + angular * WHEEL_SEPARATION * 0.5
+    left_angular_velocity = left_velocity / WHEEL_RADIUS
+    right_angular_velocity = right_velocity / WHEEL_RADIUS
+    wheel_angles["front_left"] += left_angular_velocity * dt
+    wheel_angles["rear_left"] += left_angular_velocity * dt
+    wheel_angles["front_right"] += right_angular_velocity * dt
+    wheel_angles["rear_right"] += right_angular_velocity * dt
+    return WheelCommand(
+        linear=linear,
+        angular=angular,
+        left_velocity=left_velocity,
+        right_velocity=right_velocity,
+        left_angular_velocity=left_angular_velocity,
+        right_angular_velocity=right_angular_velocity,
+        left_angle=wheel_angles["front_left"],
+        right_angle=wheel_angles["front_right"],
+    )
 
 
 def parse_keepouts(task):
@@ -434,6 +495,97 @@ def generate_nav2_files(keepouts=None):
     write_nav2_params()
 
 
+class RosTelemetry:
+    def __init__(self):
+        self.available = False
+        self.node = None
+        try:
+            import rclpy
+            from geometry_msgs.msg import TransformStamped, Twist
+            from nav_msgs.msg import Odometry
+            from sensor_msgs.msg import JointState
+            from tf2_msgs.msg import TFMessage
+        except ImportError as exc:
+            print(f"ROS telemetry disabled: {exc}", flush=True)
+            return
+
+        self.rclpy = rclpy
+        self.TransformStamped = TransformStamped
+        self.Twist = Twist
+        self.Odometry = Odometry
+        self.JointState = JointState
+        self.TFMessage = TFMessage
+        if not rclpy.ok():
+            rclpy.init(args=None)
+        self.node = rclpy.create_node("warehouse_fallback_odometry")
+        self.odom_pub = self.node.create_publisher(Odometry, "/odom", 10)
+        self.tf_pub = self.node.create_publisher(TFMessage, "/tf", 10)
+        self.joint_pub = self.node.create_publisher(JointState, "/joint_states", 10)
+        self.cmd_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
+        self.available = True
+        print("ROS telemetry enabled: publishing /cmd_vel, /odom, /tf, /joint_states", flush=True)
+
+    def shutdown(self):
+        if self.available:
+            self.node.destroy_node()
+            self.rclpy.shutdown()
+
+    def publish(self, pose, command):
+        if not self.available:
+            return
+        stamp = self.node.get_clock().now().to_msg()
+        q = quaternion_from_euler(0.0, 0.0, pose.yaw)
+
+        twist = self.Twist()
+        twist.linear.x = command.linear
+        twist.angular.z = command.angular
+        self.cmd_pub.publish(twist)
+
+        odom = self.Odometry()
+        odom.header.stamp = stamp
+        odom.header.frame_id = "odom"
+        odom.child_frame_id = "base_link"
+        odom.pose.pose.position.x = pose.x
+        odom.pose.pose.position.y = pose.y
+        odom.pose.pose.position.z = 0.32
+        odom.pose.pose.orientation.x = q["x"]
+        odom.pose.pose.orientation.y = q["y"]
+        odom.pose.pose.orientation.z = q["z"]
+        odom.pose.pose.orientation.w = q["w"]
+        odom.twist.twist.linear.x = command.linear
+        odom.twist.twist.angular.z = command.angular
+        self.odom_pub.publish(odom)
+
+        tf = self.TransformStamped()
+        tf.header.stamp = stamp
+        tf.header.frame_id = "odom"
+        tf.child_frame_id = "base_link"
+        tf.transform.translation.x = pose.x
+        tf.transform.translation.y = pose.y
+        tf.transform.translation.z = 0.32
+        tf.transform.rotation.x = q["x"]
+        tf.transform.rotation.y = q["y"]
+        tf.transform.rotation.z = q["z"]
+        tf.transform.rotation.w = q["w"]
+
+        laser_tf = self.TransformStamped()
+        laser_tf.header.stamp = stamp
+        laser_tf.header.frame_id = "base_link"
+        laser_tf.child_frame_id = "laser"
+        laser_tf.transform.translation.x = 0.36
+        laser_tf.transform.translation.y = 0.0
+        laser_tf.transform.translation.z = 0.34
+        laser_tf.transform.rotation.w = 1.0
+        self.tf_pub.publish(self.TFMessage(transforms=[tf, laser_tf]))
+
+        joints = self.JointState()
+        joints.header.stamp = stamp
+        joints.name = ["left_wheel_joint", "right_wheel_joint"]
+        joints.position = [command.left_angle, command.right_angle]
+        joints.velocity = [command.left_angular_velocity, command.right_angular_velocity]
+        self.joint_pub.publish(joints)
+
+
 def set_model_pose(model, x, y, z, yaw=0.0):
     req = (
         f'name: "{model}", '
@@ -457,8 +609,43 @@ def set_model_pose(model, x, y, z, yaw=0.0):
         print(result.stdout, end="", flush=True)
 
 
+def set_model_pose_rpy(model, x, y, z, roll, pitch, yaw):
+    q = quaternion_from_euler(roll, pitch, yaw)
+    req = (
+        f'name: "{model}", '
+        f"position: {{x: {x:.3f}, y: {y:.3f}, z: {z:.3f}}}, "
+        "orientation: "
+        f"{{x: {q['x']:.6f}, y: {q['y']:.6f}, z: {q['z']:.6f}, w: {q['w']:.6f}}}"
+    )
+    cmd = [
+        "/bin/bash",
+        "-lc",
+        gz_shell(
+            "gz service "
+            "-s /world/warehouse_mobile/set_pose "
+            "--reqtype gz.msgs.Pose "
+            "--reptype gz.msgs.Boolean "
+            f"--timeout {GZ_SERVICE_TIMEOUT_MS} "
+            f"--req '{req}'"
+        ),
+    ]
+    result = run(cmd, timeout=POSE_COMMAND_TIMEOUT_SECONDS)
+    if result.returncode != 0:
+        print(result.stdout, end="", flush=True)
+
+
 def set_robot_pose(pose):
     set_model_pose("warehouse_robot", pose.x, pose.y, 0.320, pose.yaw)
+
+
+def set_wheel_poses(pose, command):
+    wheels = [
+        ("wheel_left", 0.0, WHEEL_SEPARATION * 0.5, command.left_angle),
+        ("wheel_right", 0.0, -WHEEL_SEPARATION * 0.5, command.right_angle),
+    ]
+    for model, local_x, local_y, spin in wheels:
+        x, y = transform_body_to_world(pose, local_x, local_y)
+        set_model_pose_rpy(model, x, y, WHEEL_Z, math.pi / 2.0, spin, pose.yaw)
 
 
 def set_cargo_visible(pose):
@@ -501,11 +688,29 @@ def launch_gazebo(env):
     return proc
 
 
-def state_payload(status, pose, task=None, path=None, cargo=None, message=""):
+def command_payload(command):
+    if not command:
+        return None
+    return {
+        "linear_x": command.linear,
+        "angular_z": command.angular,
+        "left_wheel_linear": command.left_velocity,
+        "right_wheel_linear": command.right_velocity,
+        "left_wheel_rad_s": command.left_angular_velocity,
+        "right_wheel_rad_s": command.right_angular_velocity,
+        "left_angle": command.left_angle,
+        "right_angle": command.right_angle,
+        "steering_angle": command.steering_angle,
+    }
+
+
+def state_payload(status, pose, task=None, path=None, cargo=None, message="", command=None):
     return {
         "status": status,
         "message": message,
         "robot": {"x": pose.x, "y": pose.y, "yaw": pose.yaw},
+        "odom": {"frame_id": "odom", "child_frame_id": "base_link", "x": pose.x, "y": pose.y, "yaw": pose.yaw},
+        "motors": command_payload(command),
         "task": task,
         "path": [{"x": p.x, "y": p.y, "yaw": p.yaw} for p in (path or [])],
         "cargo": cargo,
@@ -539,23 +744,48 @@ def map_payload():
     }
 
 
-def move_along(path, pose, task, cargo):
+def move_along(path, pose, task, cargo, telemetry, wheel_angles):
     if not path:
         return pose
     current = pose
+    tick = 0
     for target in path[1:]:
-        dx = target.x - current.x
-        dy = target.y - current.y
+        segment_start = current
+        dx = target.x - segment_start.x
+        dy = target.y - segment_start.y
         dist = math.hypot(dx, dy)
-        steps = max(1, int(dist / (LINEAR_SPEED * STEP_SECONDS)))
-        yaw = math.atan2(dy, dx) if dist > 0.01 else target.yaw
+        target_yaw = math.atan2(dy, dx) if dist > 0.01 else target.yaw
+        yaw_delta = normalize_angle(target_yaw - segment_start.yaw)
+        linear_steps = math.ceil(dist / (LINEAR_SPEED * STEP_SECONDS))
+        angular_steps = math.ceil(abs(yaw_delta) / (MAX_ANGULAR_SPEED * STEP_SECONDS))
+        steps = max(1, linear_steps, angular_steps)
         for step in range(1, steps + 1):
             ratio = step / steps
-            current = Pose2D(current.x + dx / steps, current.y + dy / steps, yaw)
+            previous = current
+            next_yaw = normalize_angle(segment_start.yaw + yaw_delta * ratio)
+            current = Pose2D(segment_start.x + dx * ratio, segment_start.y + dy * ratio, next_yaw)
+            linear = math.hypot(current.x - previous.x, current.y - previous.y) / STEP_SECONDS
+            angular = normalize_angle(current.yaw - previous.yaw) / STEP_SECONDS
+            command = motor_command(linear, angular, wheel_angles, STEP_SECONDS)
             set_robot_pose(current)
+            set_wheel_poses(current, command)
+            telemetry.publish(current, command)
             if cargo:
                 set_cargo_visible(current)
-            write_json(STATE_FILE, state_payload("executing", current, task, path, cargo))
+            if tick % MOTOR_LOG_INTERVAL_STEPS == 0:
+                print(
+                        "[motors] "
+                        f"odom=({current.x:.2f},{current.y:.2f},{current.yaw:.2f}) "
+                        f"cmd_vel=(linear.x={command.linear:.2f}, angular.z={command.angular:.2f}) "
+                        f"left=(v={command.left_velocity:.2f}m/s, omega={command.left_angular_velocity:.2f}rad/s, "
+                        f"angle={command.left_angle:.2f}) "
+                        f"right=(v={command.right_velocity:.2f}m/s, omega={command.right_angular_velocity:.2f}rad/s, "
+                        f"angle={command.right_angle:.2f}) "
+                    f"steering={command.steering_angle:.2f}",
+                    flush=True,
+                )
+            write_json(STATE_FILE, state_payload("executing", current, task, path, cargo, command=command))
+            tick += 1
             time.sleep(STEP_SECONDS)
     current = Pose2D(path[-1].x, path[-1].y, path[-1].yaw)
     set_robot_pose(current)
@@ -603,7 +833,7 @@ def select_product_plan(requested_name, pose, drop_pose, keepouts):
     return candidates[0], reason
 
 
-def execute_task(task, pose):
+def execute_task(task, pose, telemetry, wheel_angles):
     product_name = task.get("product", "ProductR")
     try:
         drop = task["drop"]
@@ -651,7 +881,7 @@ def execute_task(task, pose):
         flush=True,
     )
     write_json(STATE_FILE, state_payload("planned", pose, effective_task, full_path, None, "path planned"))
-    pose = move_along(pickup_path, pose, effective_task, None)
+    pose = move_along(pickup_path, pose, effective_task, None, telemetry, wheel_angles)
     print(
         f"pick_up product={product_name} storage={product['storage']} "
         f"slot=({product['slot']['x']:.2f},{product['slot']['y']:.2f},{product['slot']['z']:.2f})",
@@ -659,7 +889,7 @@ def execute_task(task, pose):
     )
     set_cargo_visible(pose)
     time.sleep(0.3)
-    pose = move_along(drop_path, pose, effective_task, product_name)
+    pose = move_along(drop_path, pose, effective_task, product_name, telemetry, wheel_angles)
     hide_cargo()
     show_delivered(drop_pose.x, drop_pose.y)
     print(f"drop_off product={product_name} target=({drop_pose.x:.2f},{drop_pose.y:.2f})", flush=True)
@@ -672,6 +902,8 @@ def main():
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     generate_nav2_files()
     pose = Pose2D(-7.0, -5.0, 0.0)
+    wheel_angles = {"front_left": 0.0, "rear_left": 0.0, "front_right": 0.0, "rear_right": 0.0}
+    telemetry = RosTelemetry()
     write_json(STATE_FILE, state_payload("starting", pose, None, [], None, "starting gazebo"))
 
     env = os.environ.copy()
@@ -691,6 +923,7 @@ def main():
             os.killpg(os.getpgid(gz.pid), signal.SIGINT)
         except ProcessLookupError:
             pass
+        telemetry.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
@@ -698,6 +931,7 @@ def main():
 
     time.sleep(8)
     set_robot_pose(pose)
+    set_wheel_poses(pose, motor_command(0.0, 0.0, wheel_angles, STEP_SECONDS))
     hide_cargo()
     hide_delivered()
     write_json(STATE_FILE, state_payload("idle", pose, None, [], None, "waiting for TaskGoal"))
@@ -710,12 +944,13 @@ def main():
                 last_task_version = version
                 try:
                     task = read_json(TASK_FILE)
-                    pose = execute_task(task, pose)
+                    pose = execute_task(task, pose, telemetry, wheel_angles)
                 except json.JSONDecodeError as exc:
                     print(f"Task rejected: invalid JSON: {exc}", flush=True)
         else:
             write_json(STATE_FILE, state_payload("idle", pose, None, [], None, "waiting for TaskGoal"))
         time.sleep(TASK_POLL_SECONDS)
+    telemetry.shutdown()
     return gz.returncode
 
 

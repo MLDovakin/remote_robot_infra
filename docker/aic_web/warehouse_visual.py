@@ -8,6 +8,8 @@ import threading
 import time
 from pathlib import Path
 
+from warehouse_drive import GazeboDriveProjector
+
 
 WORLD = Path("/opt/aic_web/warehouse_visual.sdf")
 AIC_SETUP = Path("/ws_aic/install/setup.bash")
@@ -242,7 +244,8 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
 
     time.sleep(8)
-    set_pose(*ROUTE[0][:3])
+    drive = GazeboDriveProjector("warehouse_mobile", map_origin=(-11.0, -8.0), map_resolution=0.05)
+    drive.reset(*ROUTE[0][:3])
     hide_cargo()
     hide_delivered()
     cargo = None
@@ -254,7 +257,7 @@ def main():
             for x, y, yaw in interpolate(start, end, INTERPOLATION_STEPS):
                 if gz.poll() is not None:
                     return gz.returncode
-                set_pose(x, y, yaw)
+                drive.project_pose(x, y, yaw, STEP_DELAY_SECONDS, "visual_route", log_every=4)
                 if cargo:
                     set_cargo_visible(x, y, yaw)
                 time.sleep(STEP_DELAY_SECONDS)

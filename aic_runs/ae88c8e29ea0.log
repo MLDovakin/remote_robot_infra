@@ -1,5 +1,0 @@
-$ ['/bin/bash', '-lc', 'source /ws_aic/install/setup.bash && ros2 run aic_model aic_model --ros-args -p use_sim_time:=true -p policy:=aic_example_policies.ros.WaveArm']
-
-[INFO] [1778272714.261296922] [aic_model]: Loading policy module: aic_example_policies.ros.WaveArm
-[INFO] [1778272714.295117839] [aic_model]: Loaded policy module aic_example_policies.ros.WaveArm
-[INFO] [1778272714.302490631] [aic_model]: Using policy: WaveArm

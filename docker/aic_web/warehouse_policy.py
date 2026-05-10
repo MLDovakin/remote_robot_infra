@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from warehouse_drive import GazeboDriveProjector
+
 
 WORLD = Path("/opt/aic_web/warehouse_visual.sdf")
 AIC_SETUP = Path("/ws_aic/install/setup.bash")
@@ -288,7 +290,8 @@ def main():
     pose = Pose2D(-7.0, -5.0, 0.0)
     dt = CONTROL_DT_SECONDS
     time.sleep(8)
-    set_pose(pose)
+    drive = GazeboDriveProjector("warehouse_mobile", map_origin=(-11.0, -8.0), map_resolution=0.05)
+    drive.reset(pose.x, pose.y, pose.yaw)
     hide_cargo()
     hide_delivered()
 
@@ -310,8 +313,8 @@ def main():
             time.sleep(GOAL_PAUSE_SECONDS)
             continue
 
-        pose = step_pose(pose, action["linear"], action["angular"], dt)
-        set_pose(pose)
+        odom_pose = drive.apply_cmd(action["linear"], action["angular"], dt, "policy_cmd_vel", log_every=8)
+        pose = Pose2D(odom_pose.x, odom_pose.y, odom_pose.yaw)
         if policy.cargo:
             set_cargo_visible(pose)
         if tick % 8 == 0:

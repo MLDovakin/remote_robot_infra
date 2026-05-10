@@ -41,6 +41,7 @@ COPY --chmod=755 docker/aic_web/warehouse_visual.py /opt/aic_web/warehouse_visua
 COPY --chmod=755 docker/aic_web/warehouse_policy.py /opt/aic_web/warehouse_policy.py
 COPY --chmod=755 docker/aic_web/warehouse_nav2_mode.py /opt/aic_web/warehouse_nav2_mode.py
 COPY --chmod=755 docker/aic_web/warehouse_lidar_random_mode.py /opt/aic_web/warehouse_lidar_random_mode.py
+COPY --chmod=644 docker/aic_web/warehouse_drive.py /opt/aic_web/warehouse_drive.py
 COPY --chmod=644 docker/aic_web/warehouse_visual.sdf /opt/aic_web/warehouse_visual.sdf
 
 EXPOSE 8080 6080

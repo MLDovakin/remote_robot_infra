@@ -1,9 +1,0 @@
-{
-  "command": "source /ws_aic/install/setup.bash && ros2 topic list",
-  "created_at": "2026-05-08 21:19:00",
-  "finished_at": "2026-05-08 21:19:03",
-  "id": "6fa232cd0cbb",
-  "kind": "custom",
-  "returncode": 0,
-  "status": "finished"
-}

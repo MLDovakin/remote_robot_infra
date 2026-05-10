@@ -156,6 +156,23 @@
       </link>
     </model>
 
+    <model name="wheel_left">
+      <static>false</static>
+      <pose>0 0 -10 0 0 0</pose>
+      <link name="link">
+        <visual name="visual"><geometry><cylinder><radius>0.17</radius><length>0.12</length></cylinder></geometry><material><ambient>0.02 0.03 0.04 1</ambient><diffuse>0.03 0.04 0.05 1</diffuse></material></visual>
+        <visual name="stripe"><pose>0.088 0 0 0 0 0</pose><geometry><box><size>0.17 0.13 0.026</size></box></geometry><material><ambient>0.90 0.92 0.95 1</ambient><diffuse>0.90 0.92 0.95 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="wheel_right">
+      <static>false</static>
+      <pose>0 0 -10 0 0 0</pose>
+      <link name="link">
+        <visual name="visual"><geometry><cylinder><radius>0.17</radius><length>0.12</length></cylinder></geometry><material><ambient>0.02 0.03 0.04 1</ambient><diffuse>0.03 0.04 0.05 1</diffuse></material></visual>
+        <visual name="stripe"><pose>0.088 0 0 0 0 0</pose><geometry><box><size>0.17 0.13 0.026</size></box></geometry><material><ambient>0.90 0.92 0.95 1</ambient><diffuse>0.90 0.92 0.95 1</diffuse></material></visual>
+      </link>
+    </model>
+
     <model name="cargo_item">
       <static>true</static>
       <pose>-7 -5 -10 0 0 0</pose>

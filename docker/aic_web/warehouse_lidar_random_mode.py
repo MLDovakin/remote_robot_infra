@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from warehouse_drive import GazeboDriveProjector, wheel_models
+
 
 AIC_SETUP = Path("/ws_aic/install/setup.bash")
 RUNS_DIR = Path(os.environ.get("AIC_RUNS_DIR", "/workspace/aic_runs"))
@@ -32,15 +34,17 @@ ROBOT_RADIUS = 0.48
 LIDAR_RANGE = 5.2
 LIDAR_RAYS = 144
 LIDAR_VISUAL_RAYS = 48
-EXPLORE_STEP_SECONDS = 0.018
-TASK_STEP_SECONDS = 0.018
+EXPLORE_STEP_SECONDS = 0.010
+TASK_STEP_SECONDS = 0.010
+ODOM_DT_SECONDS = 0.080
 EXPLORE_SPEED = 3.4
 TASK_SPEED = 3.0
-POSE_SPACING = 0.85
+POSE_SPACING = 1.45
 GZ_SERVICE_TIMEOUT_MS = 1500
 POSE_COMMAND_TIMEOUT_SECONDS = 2.0
 MAPPED_COVERAGE = 0.82
 HIDDEN_Z = -10.0
+DRIVE = None
 
 IGNORED_GAZEBO_LOG_LINES = (
     "NodeShared::RecvSrvRequest() error sending response: Host unreachable",
@@ -359,6 +363,7 @@ def write_world(world):
     models.append(model_box("cargo_item", -10.6, -7.0, HIDDEN_Z, 0.42, 0.34, 0.30, "producty", static=False))
     models.append(model_box("pickup_marker", -10.6, -7.0, HIDDEN_Z, 0.70, 0.06, 0.06, "productg", static=False))
     models.append(model_box("delivered_item", -10.6, -7.0, HIDDEN_Z, 0.46, 0.38, 0.30, "productg", static=False))
+    models.append(wheel_models())
     WORLD.write_text(
         f"""<?xml version="1.0" ?>
 <sdf version="1.9">
@@ -497,7 +502,10 @@ def set_model_pose(model, x, y, z, yaw=0.0):
 
 
 def set_robot_pose(pose):
-    set_model_pose("warehouse_robot", pose.x, pose.y, 0.320, pose.yaw)
+    if DRIVE:
+        DRIVE.project_pose(pose.x, pose.y, pose.yaw, ODOM_DT_SECONDS, "lidar_random", log_every=10)
+    else:
+        set_model_pose("warehouse_robot", pose.x, pose.y, 0.320, pose.yaw)
 
 
 def product_model_name(product_name):
@@ -664,6 +672,7 @@ def launch_gazebo(env):
 
 
 def main():
+    global DRIVE
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     MAP_DIR.mkdir(parents=True, exist_ok=True)
     seed = int(os.environ.get("LIDAR_RANDOM_SEED", "0")) or int(time.time())
@@ -696,7 +705,8 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
     time.sleep(8)
-    set_robot_pose(pose)
+    DRIVE = GazeboDriveProjector("lidar_random_warehouse", map_origin=(ORIGIN_X, ORIGIN_Y), map_resolution=RESOLUTION)
+    DRIVE.reset(pose.x, pose.y, pose.yaw)
     hide_cargo()
     hide_delivered()
     hide_pickup_marker()
