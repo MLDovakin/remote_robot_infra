@@ -6,6 +6,13 @@ This setup runs the AIC evaluation image in Docker and exposes:
 - `http://localhost:6080/vnc.html?autoconnect=1&resize=scale` - noVNC display for Gazebo/RViz.
 
 The image is based on `ghcr.io/intrinsic-dev/aic/aic_eval:latest`, which is the official Ubuntu 24.04 / ROS 2 Kilted / Gazebo environment used by the AIC toolkit.
+<img width="2990" height="1530" alt="image" src="https://github.com/user-attachments/assets/c1c1a42d-4dc6-4223-8419-7812655417e9" />
+
+
+## Lidar Mode in generated warehouse 
+
+
+<img width="3022" height="1618" alt="image" src="https://github.com/user-attachments/assets/00f6befb-4fc0-48ee-bf10-7d50498956ab" />
 
 ## Run
 

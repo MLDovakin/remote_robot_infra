@@ -31,6 +31,7 @@ GRID_H = int(HEIGHT_M / RESOLUTION)
 ROBOT_RADIUS = 0.48
 LIDAR_RANGE = 5.2
 LIDAR_RAYS = 144
+LIDAR_VISUAL_RAYS = 48
 EXPLORE_STEP_SECONDS = 0.018
 TASK_STEP_SECONDS = 0.018
 EXPLORE_SPEED = 3.4
@@ -43,6 +44,7 @@ HIDDEN_Z = -10.0
 
 IGNORED_GAZEBO_LOG_LINES = (
     "NodeShared::RecvSrvRequest() error sending response: Host unreachable",
+    "[SignalHandler.cc:178] [GUI] 4 Interrupted system call",
 )
 
 
@@ -142,33 +144,35 @@ def make_random_world(seed=None):
     shelves = []
     products = {}
     product_names = ["ProductR", "ProductG", "ProductB", "ProductY", "ProductC"]
-    rows = [-5.6, -2.6, 0.4, 3.4, 6.0]
+    rows = [-5.8, -3.2, -0.6, 2.0, 4.6, 6.6]
     shelf_index = 0
     for y in rows:
-        for x in [-6.5, -2.3, 1.9, 6.1]:
-            if rng.random() < 0.18:
+        for x in [-7.8, -4.6, -1.4, 1.8, 5.0, 8.2]:
+            if rng.random() < 0.24:
                 continue
-            w = rng.uniform(1.45, 2.25)
-            h = rng.uniform(0.52, 0.82)
+            w = rng.uniform(1.35, 2.05)
+            h = rng.uniform(0.58, 0.88)
             shelf_index += 1
             shelf = Rect(f"shelf_{shelf_index}", x - w / 2, y - h / 2, x + w / 2, y + h / 2, "shelf")
             shelves.append(shelf)
             rects.append(shelf)
-    for i in range(10):
+    for i in range(16):
         x = rng.uniform(-10.0, 10.0)
         y = rng.uniform(-7.0, 7.2)
         if abs(x + 10.5) < 1.5 and abs(y + 7.0) < 1.5:
             continue
         if any(r.contains(x, y) for r in rects):
             continue
-        rects.append(Rect(f"crate_{i + 1}", x - 0.28, y - 0.28, x + 0.28, y + 0.28, "crate"))
+        size = rng.uniform(0.42, 0.72)
+        rects.append(Rect(f"pallet_stack_{i + 1}", x - size / 2, y - size / 2, x + size / 2, y + size / 2, "crate"))
     rng.shuffle(shelves)
     for name, shelf in zip(product_names, shelves[: len(product_names)]):
         r = shelf.normalized()
         side_y = r.y1 - 0.9 if abs(r.y1 - ORIGIN_Y) > abs(r.y2 - (ORIGIN_Y + HEIGHT_M)) else r.y2 + 0.9
+        slot_y = r.y1 + 0.18 if side_y < (r.y1 + r.y2) / 2 else r.y2 - 0.18
         products[name] = {
             "storage": shelf.name,
-            "slot": {"x": (r.x1 + r.x2) / 2, "y": (r.y1 + r.y2) / 2, "z": 1.02},
+            "slot": {"x": (r.x1 + r.x2) / 2, "y": slot_y, "z": 1.38},
             "pickup": {"x": (r.x1 + r.x2) / 2, "y": side_y, "yaw": math.pi / 2 if side_y < (r.y1 + r.y2) / 2 else -math.pi / 2},
         }
     start = Pose2D(-10.6, -7.0, 0.0)
@@ -181,8 +185,20 @@ def make_random_world(seed=None):
 def material(kind):
     colors = {
         "wall": ("0.66 0.66 0.64 1", "0.76 0.76 0.74 1"),
-        "shelf": ("0.44 0.35 0.24 1", "0.58 0.47 0.32 1"),
-        "crate": ("0.18 0.30 0.58 1", "0.22 0.38 0.72 1"),
+        "floor": ("0.50 0.50 0.47 1", "0.68 0.68 0.63 1"),
+        "shelf": ("0.70 0.52 0.18 1", "0.96 0.70 0.18 1"),
+        "rack_frame": ("0.03 0.04 0.05 1", "0.05 0.06 0.07 1"),
+        "crate": ("0.44 0.28 0.11 1", "0.62 0.42 0.18 1"),
+        "box_dark": ("0.30 0.21 0.10 1", "0.44 0.32 0.14 1"),
+        "label": ("0.86 0.86 0.76 1", "0.98 0.96 0.84 1"),
+        "barcode": ("0.02 0.02 0.02 1", "0.02 0.02 0.02 1"),
+        "marking": ("0.04 0.45 0.16 1", "0.04 0.55 0.20 1"),
+        "hazard": ("0.90 0.75 0.03 1", "1.00 0.84 0.04 1"),
+        "productr": ("0.72 0.05 0.04 1", "0.95 0.08 0.06 1"),
+        "productg": ("0.02 0.45 0.14 1", "0.03 0.70 0.22 1"),
+        "productb": ("0.04 0.17 0.64 1", "0.08 0.28 0.95 1"),
+        "producty": ("0.75 0.58 0.03 1", "0.98 0.78 0.06 1"),
+        "productc": ("0.02 0.58 0.62 1", "0.04 0.84 0.90 1"),
     }
     ambient, diffuse = colors.get(kind, colors["crate"])
     return f"<material><ambient>{ambient}</ambient><diffuse>{diffuse}</diffuse></material>"
@@ -200,16 +216,132 @@ def model_box(name, x, y, z, sx, sy, sz, kind, static=True):
     </model>"""
 
 
+def visual_box(name, x, y, z, sx, sy, sz, kind):
+    return f"""
+        <visual name="{name}">
+          <pose>{x:.3f} {y:.3f} {z:.3f} 0 0 0</pose>
+          <geometry><box><size>{sx:.3f} {sy:.3f} {sz:.3f}</size></box></geometry>
+          {material(kind)}
+        </visual>"""
+
+
+def visual_box_pose(name, x, y, z, sx, sy, sz, yaw, kind):
+    return f"""
+        <visual name="{name}">
+          <pose>{x:.3f} {y:.3f} {z:.3f} 0 0 {yaw:.3f}</pose>
+          <geometry><box><size>{sx:.3f} {sy:.3f} {sz:.3f}</size></box></geometry>
+          {material(kind)}
+        </visual>"""
+
+
+def rack_model(rect):
+    r = rect.normalized()
+    cx = (r.x1 + r.x2) / 2
+    cy = (r.y1 + r.y2) / 2
+    sx = r.x2 - r.x1
+    sy = r.y2 - r.y1
+    seed = sum(ord(ch) for ch in rect.name)
+    rng = random.Random(seed)
+    visuals = []
+    post = 0.07
+    height = 2.05
+    for px in (-sx / 2 + post / 2, sx / 2 - post / 2):
+        for py in (-sy / 2 + post / 2, sy / 2 - post / 2):
+            visuals.append(visual_box(f"post_{len(visuals)}", px, py, height / 2, post, post, height, "rack_frame"))
+    for level, z in enumerate((0.42, 1.04, 1.66), 1):
+        visuals.append(visual_box(f"deck_{level}", 0, 0, z, sx + 0.14, sy + 0.18, 0.07, "shelf"))
+        for bx in (-sx / 4, sx / 4):
+            bw = min(0.48, sx * 0.36)
+            bd = min(0.34, sy * 0.42)
+            bh = rng.uniform(0.28, 0.48)
+            by = rng.choice((-sy * 0.18, sy * 0.18))
+            visuals.append(visual_box(f"box_{level}_{bx:.1f}", bx, by, z + 0.08 + bh / 2, bw, bd, bh, "crate"))
+            visuals.append(visual_box(f"label_{level}_{bx:.1f}", bx, by - bd / 2 - 0.004, z + 0.10 + bh * 0.52, bw * 0.28, 0.012, bh * 0.38, "label"))
+            visuals.append(visual_box(f"barcode_{level}_{bx:.1f}", bx + bw * 0.18, by - bd / 2 - 0.008, z + 0.10 + bh * 0.52, bw * 0.06, 0.014, bh * 0.34, "barcode"))
+    return f"""
+    <model name="{rect.name}">
+      <static>true</static>
+      <pose>{cx:.3f} {cy:.3f} 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><pose>0 0 {height / 2:.3f} 0 0 0</pose><geometry><box><size>{sx:.3f} {sy:.3f} {height:.3f}</size></box></geometry></collision>
+        {''.join(visuals)}
+      </link>
+    </model>"""
+
+
+def pallet_stack_model(rect):
+    r = rect.normalized()
+    cx = (r.x1 + r.x2) / 2
+    cy = (r.y1 + r.y2) / 2
+    sx = r.x2 - r.x1
+    sy = r.y2 - r.y1
+    seed = sum(ord(ch) for ch in rect.name)
+    rng = random.Random(seed)
+    visuals = [visual_box("pallet", 0, 0, 0.08, sx + 0.18, sy + 0.18, 0.16, "box_dark")]
+    for layer in range(rng.randint(2, 4)):
+        z = 0.20 + layer * 0.30
+        visuals.append(visual_box(f"case_{layer}_a", -sx * 0.18, -sy * 0.12, z + 0.14, sx * 0.48, sy * 0.45, 0.28, "crate"))
+        visuals.append(visual_box(f"case_{layer}_b", sx * 0.18, sy * 0.12, z + 0.14, sx * 0.48, sy * 0.45, 0.28, "crate"))
+    return f"""
+    <model name="{rect.name}">
+      <static>true</static>
+      <pose>{cx:.3f} {cy:.3f} 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><pose>0 0 0.55 0 0 0</pose><geometry><box><size>{sx + 0.18:.3f} {sy + 0.18:.3f} 1.10</size></box></geometry></collision>
+        {''.join(visuals)}
+      </link>
+    </model>"""
+
+
+def product_kind(name):
+    return name.lower()
+
+
+def product_model(name, slot):
+    return model_box(f"item_{name}", slot["x"], slot["y"], slot["z"], 0.42, 0.34, 0.30, product_kind(name), static=False)
+
+
+def floor_marking(name, x, y, sx, sy, kind="marking"):
+    return model_box(name, x, y, 0.006, sx, sy, 0.012, kind)
+
+
 def write_world(world):
     MAP_DIR.mkdir(parents=True, exist_ok=True)
     models = [
         model_box("floor", 0, 0, -0.04, WIDTH_M, HEIGHT_M, 0.08, "floor"),
+        floor_marking("dispatch_lane_a", -8.4, -7.1, 3.6, 0.08),
+        floor_marking("dispatch_lane_b", -8.4, -6.0, 3.6, 0.08),
+        floor_marking("main_aisle_left", -1.0, -7.65, 20.0, 0.07),
+        floor_marking("main_aisle_right", -1.0, 7.65, 20.0, 0.07),
+        floor_marking("pickup_hazard_front", -5.7, -7.55, 5.2, 0.09, "hazard"),
+        floor_marking("pickup_hazard_back", -5.7, -5.15, 5.2, 0.09, "hazard"),
+        floor_marking("pickup_hazard_left", -8.3, -6.35, 0.09, 2.4, "hazard"),
+        floor_marking("pickup_hazard_right", -3.1, -6.35, 0.09, 2.4, "hazard"),
     ]
     for rect in world["rects"]:
         r = rect.normalized()
-        height = 2.4 if rect.kind == "wall" else 1.35 if rect.kind == "shelf" else 0.75
-        models.append(model_box(rect.name, (r.x1 + r.x2) / 2, (r.y1 + r.y2) / 2, height / 2, r.x2 - r.x1, r.y2 - r.y1, height, rect.kind))
+        if rect.kind == "shelf":
+            models.append(rack_model(rect))
+        elif rect.kind == "crate":
+            models.append(pallet_stack_model(rect))
+        else:
+            height = 2.6
+            models.append(model_box(rect.name, (r.x1 + r.x2) / 2, (r.y1 + r.y2) / 2, height / 2, r.x2 - r.x1, r.y2 - r.y1, height, rect.kind))
+    for name, product in world["products"].items():
+        models.append(product_model(name, product["slot"]))
     start = world["start"]
+    lidar_visuals = [
+        """
+        <visual name="scan_disc">
+          <pose>0 0 0.035 0 0 0</pose>
+          <geometry><cylinder><radius>5.200</radius><length>0.010</length></cylinder></geometry>
+          <material><ambient>0.05 0.10 1.00 0.18</ambient><diffuse>0.05 0.10 1.00 0.18</diffuse><transparency>0.72</transparency></material>
+        </visual>"""
+    ]
+    for i in range(LIDAR_VISUAL_RAYS):
+        angle = 2 * math.pi * i / LIDAR_VISUAL_RAYS
+        length = LIDAR_RANGE * (0.55 + 0.45 * ((i % 4) / 3))
+        lidar_visuals.append(visual_box_pose(f"scan_ray_{i}", math.cos(angle) * length / 2, math.sin(angle) * length / 2, 0.055, length, 0.018, 0.018, angle, "productb"))
     models.append(f"""
     <model name="warehouse_robot">
       <pose>{start.x:.3f} {start.y:.3f} 0.32 0 0 {start.yaw:.3f}</pose>
@@ -217,12 +349,16 @@ def write_world(world):
         <inertial><mass>20</mass></inertial>
         <collision name="base_collision"><geometry><box><size>1.0 0.72 0.38</size></box></geometry></collision>
         <visual name="base_visual"><geometry><box><size>1.0 0.72 0.38</size></box></geometry><material><ambient>0.86 0.86 0.82 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material></visual>
+        <visual name="fork_left"><pose>0.63 0.18 -0.20 0 0 0</pose><geometry><box><size>0.75 0.07 0.06</size></box></geometry><material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material></visual>
+        <visual name="fork_right"><pose>0.63 -0.18 -0.20 0 0 0</pose><geometry><box><size>0.75 0.07 0.06</size></box></geometry><material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material></visual>
         <visual name="lidar"><pose>0.30 0 0.40 0 0 0</pose><geometry><cylinder><radius>0.15</radius><length>0.14</length></cylinder></geometry><material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.02 0.02 0.02 1</diffuse></material></visual>
         <visual name="scan_marker"><pose>0 0 1.45 0 0 0</pose><geometry><sphere><radius>0.075</radius></sphere></geometry><material><ambient>0.0 0.95 1.0 1</ambient><diffuse>0.0 0.95 1.0 1</diffuse></material></visual>
+        {''.join(lidar_visuals)}
       </link>
     </model>""")
-    models.append(model_box("cargo_item", -10.6, -7.0, HIDDEN_Z, 0.36, 0.32, 0.26, "crate"))
-    models.append(model_box("delivered_item", -10.6, -7.0, HIDDEN_Z, 0.42, 0.36, 0.28, "crate"))
+    models.append(model_box("cargo_item", -10.6, -7.0, HIDDEN_Z, 0.42, 0.34, 0.30, "producty", static=False))
+    models.append(model_box("pickup_marker", -10.6, -7.0, HIDDEN_Z, 0.70, 0.06, 0.06, "productg", static=False))
+    models.append(model_box("delivered_item", -10.6, -7.0, HIDDEN_Z, 0.46, 0.38, 0.30, "productg", static=False))
     WORLD.write_text(
         f"""<?xml version="1.0" ?>
 <sdf version="1.9">
@@ -364,8 +500,33 @@ def set_robot_pose(pose):
     set_model_pose("warehouse_robot", pose.x, pose.y, 0.320, pose.yaw)
 
 
-def set_cargo_visible(pose):
-    set_model_pose("cargo_item", pose.x - math.cos(pose.yaw) * 0.18, pose.y - math.sin(pose.yaw) * 0.18, 0.72, pose.yaw)
+def product_model_name(product_name):
+    return f"item_{product_name}"
+
+
+def set_product_item_pose(product_name, x, y, z, yaw=0.0):
+    set_model_pose(product_model_name(product_name), x, y, z, yaw)
+
+
+def hide_product_item(product_name):
+    set_product_item_pose(product_name, -10.6, -7.0, HIDDEN_Z)
+
+
+def set_pickup_marker(x, y, z, yaw=0.0):
+    set_model_pose("pickup_marker", x, y, z, yaw)
+
+
+def hide_pickup_marker():
+    set_model_pose("pickup_marker", -10.6, -7.0, HIDDEN_Z)
+
+
+def set_cargo_visible(pose, product_name=None):
+    x = pose.x + math.cos(pose.yaw) * 0.18
+    y = pose.y + math.sin(pose.yaw) * 0.18
+    if product_name:
+        set_product_item_pose(product_name, x, y, 0.62, pose.yaw)
+    else:
+        set_model_pose("cargo_item", x, y, 0.62, pose.yaw)
 
 
 def hide_cargo():
@@ -378,6 +539,33 @@ def hide_delivered():
 
 def show_delivered(x, y):
     set_model_pose("delivered_item", x, y, 0.28)
+
+
+def animate_pickup(product_name, product, pose, world, known, reachable, task):
+    slot = product["slot"]
+    sx, sy, sz = float(slot["x"]), float(slot["y"]), float(slot["z"])
+    tx = pose.x + math.cos(pose.yaw) * 0.18
+    ty = pose.y + math.sin(pose.yaw) * 0.18
+    tz = 0.62
+    yaw = pose.yaw
+    print(f"pickup animation product={product_name} from shelf slot=({sx:.2f},{sy:.2f},{sz:.2f})", flush=True)
+    for i in range(1, 7):
+        lift_z = sz + (1.95 - sz) * i / 6
+        set_product_item_pose(product_name, sx, sy, lift_z, yaw)
+        set_pickup_marker((sx + tx) / 2, (sy + ty) / 2, lift_z, yaw)
+        write_state(world, known, pose, "executing", f"lifting {product_name} from {product['storage']}", reachable, task=task)
+        time.sleep(0.08)
+    for i in range(1, 11):
+        t = i / 10
+        x = sx + (tx - sx) * t
+        y = sy + (ty - sy) * t
+        z = 1.95 + (tz - 1.95) * t
+        set_product_item_pose(product_name, x, y, z, yaw)
+        set_pickup_marker((x + tx) / 2, (y + ty) / 2, z + 0.18, yaw)
+        write_state(world, known, pose, "executing", f"transferring {product_name} onto robot forks", reachable, task=task)
+        time.sleep(0.08)
+    set_cargo_visible(pose, product_name)
+    hide_pickup_marker()
 
 
 def map_payload(world, known, pose, status, message, path=None, task=None, lidar=None):
@@ -421,7 +609,7 @@ def move_path(path, pose, world, known, true_occupied, reachable, status, messag
             current = Pose2D(current.x + dx / steps, current.y + dy / steps, yaw)
             set_robot_pose(current)
             if cargo:
-                set_cargo_visible(current)
+                set_cargo_visible(current, cargo)
             lidar = simulate_lidar(current, true_occupied, known)
             write_state(world, known, current, status, message, reachable, path, task, lidar)
             time.sleep(EXPLORE_STEP_SECONDS if fast else TASK_STEP_SECONDS)
@@ -452,9 +640,9 @@ def execute_task(task, pose, world, known, reachable):
     print(f"TaskGoal accepted product={product_name} pickup=({pickup.x:.2f},{pickup.y:.2f}) drop=({drop_pose.x:.2f},{drop_pose.y:.2f})", flush=True)
     pose = move_path(p1, pose, world, known, occ, reachable, "executing", "driving to pickup", task, None, fast=False)
     print(f"pick_up product={product_name} storage={product['storage']}", flush=True)
-    set_cargo_visible(pose)
+    animate_pickup(product_name, product, pose, world, known, reachable, task)
     pose = move_path(p2, pose, world, known, occ, reachable, "executing", "driving to drop", task, product_name, fast=False)
-    hide_cargo()
+    set_product_item_pose(product_name, drop_pose.x, drop_pose.y, 0.38, drop_pose.yaw)
     show_delivered(drop_pose.x, drop_pose.y)
     print(f"drop_off product={product_name} target=({drop_pose.x:.2f},{drop_pose.y:.2f})", flush=True)
     write_state(world, known, pose, "done", "task completed", reachable, full, task)
@@ -511,6 +699,7 @@ def main():
     set_robot_pose(pose)
     hide_cargo()
     hide_delivered()
+    hide_pickup_marker()
 
     last_task_version = TASK_FILE.stat().st_mtime_ns if TASK_FILE.exists() else None
     status = "mapping"
