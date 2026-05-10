@@ -15,11 +15,16 @@ ROUTE = [
     (-7.0, -5.0, 0.0, "startup at dispatch lane"),
     (-3.5, -5.0, 0.0, "leaving dispatch area"),
     (3.0, -5.0, 0.0, "driving through lower aisle"),
-    (5.2, -4.0, 0.45, "approaching StorageR"),
-    (6.0, -4.0, 0.0, "pickup ProductR"),
-    (3.0, -1.8, 2.35, "crossing central aisle"),
-    (5.2, 0.0, 0.0, "approaching StorageG"),
-    (6.0, 0.0, 0.0, "pickup ProductG"),
+    (6.55, -5.90, 0.35, "approaching StorageR front"),
+    (6.55, -5.35, 1.5708, "pickup ProductR"),
+    (6.55, -5.90, -1.5708, "backing out from StorageR"),
+    (3.80, -5.90, 3.14159, "clearing StorageR side"),
+    (3.80, -1.90, 1.5708, "driving around storage racks"),
+    (6.55, -1.90, 0.0, "approaching StorageG front"),
+    (6.55, -1.35, 1.5708, "pickup ProductG"),
+    (6.55, -1.90, -1.5708, "backing out from StorageG"),
+    (3.80, -1.90, 3.14159, "clearing StorageG side"),
+    (3.80, 2.00, 1.5708, "driving around StorageG"),
     (2.0, 2.0, 2.65, "turning toward dispatch"),
     (-5.5, 4.2, 3.05, "driving to DispatchB"),
     (-8.0, 4.0, 3.14159, "dropoff at DispatchB"),
@@ -30,6 +35,8 @@ HIDDEN_Z = -10.0
 STEP_DELAY_SECONDS = 0.035
 WAYPOINT_DELAY_SECONDS = 0.12
 INTERPOLATION_STEPS = 16
+POSE_COMMAND_TIMEOUT_SECONDS = 2.0
+GZ_SERVICE_TIMEOUT_MS = 1500
 IGNORED_GAZEBO_LOG_LINES = (
     "NodeShared::RecvSrvRequest() error sending response: Host unreachable",
 )
@@ -123,12 +130,12 @@ def set_pose(x, y, yaw):
             "-s /world/warehouse_mobile/set_pose "
             "--reqtype gz.msgs.Pose "
             "--reptype gz.msgs.Boolean "
-            "--timeout 1000 "
+            f"--timeout {GZ_SERVICE_TIMEOUT_MS} "
             f"--req '{req}'"
         ),
     ]
-    result = run(cmd, timeout=0.45)
-    if result.returncode not in (0, 124):
+    result = run(cmd, timeout=POSE_COMMAND_TIMEOUT_SECONDS)
+    if result.returncode != 0:
         print(result.stdout, end="", flush=True)
 
 
@@ -146,12 +153,12 @@ def set_model_pose(model, x, y, z, yaw=0.0):
             "-s /world/warehouse_mobile/set_pose "
             "--reqtype gz.msgs.Pose "
             "--reptype gz.msgs.Boolean "
-            "--timeout 1000 "
+            f"--timeout {GZ_SERVICE_TIMEOUT_MS} "
             f"--req '{req}'"
         ),
     ]
-    result = run(cmd, timeout=0.45)
-    if result.returncode not in (0, 124):
+    result = run(cmd, timeout=POSE_COMMAND_TIMEOUT_SECONDS)
+    if result.returncode != 0:
         print(result.stdout, end="", flush=True)
 
 

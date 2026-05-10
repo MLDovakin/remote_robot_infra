@@ -16,6 +16,8 @@ HIDDEN_Z = -10.0
 CONTROL_DT_SECONDS = 0.04
 SPEED_MULTIPLIER = 5.0
 GOAL_PAUSE_SECONDS = 0.12
+POSE_COMMAND_TIMEOUT_SECONDS = 2.0
+GZ_SERVICE_TIMEOUT_MS = 1500
 IGNORED_GAZEBO_LOG_LINES = (
     "NodeShared::RecvSrvRequest() error sending response: Host unreachable",
 )
@@ -42,9 +44,16 @@ class WarehousePolicy:
             Goal(-7.0, -5.0, 0.0, "dispatch start"),
             Goal(-3.5, -5.0, 0.0, "leave dispatch lane"),
             Goal(3.0, -5.0, 0.0, "drive lower aisle"),
-            Goal(6.0, -4.0, 0.0, "pickup at StorageR"),
-            Goal(3.0, -1.8, 2.35, "cross center aisle"),
-            Goal(6.0, 0.0, 0.0, "pickup at StorageG"),
+            Goal(6.55, -5.90, 0.35, "approach StorageR front"),
+            Goal(6.55, -5.35, math.pi / 2, "pickup at StorageR"),
+            Goal(6.55, -5.90, -math.pi / 2, "back out from StorageR"),
+            Goal(3.80, -5.90, math.pi, "clear StorageR side"),
+            Goal(3.80, -1.90, math.pi / 2, "drive around storage racks"),
+            Goal(6.55, -1.90, 0.0, "approach StorageG front"),
+            Goal(6.55, -1.35, math.pi / 2, "pickup at StorageG"),
+            Goal(6.55, -1.90, -math.pi / 2, "back out from StorageG"),
+            Goal(3.80, -1.90, math.pi, "clear StorageG side"),
+            Goal(3.80, 2.00, math.pi / 2, "drive around StorageG"),
             Goal(2.0, 2.0, 2.65, "turn to dispatch"),
             Goal(-8.0, 4.0, math.pi, "dropoff at DispatchB"),
             Goal(-7.0, -5.0, -math.pi / 2, "return standby"),
@@ -190,12 +199,12 @@ def set_pose(pose: Pose2D):
             "-s /world/warehouse_mobile/set_pose "
             "--reqtype gz.msgs.Pose "
             "--reptype gz.msgs.Boolean "
-            "--timeout 1000 "
+            f"--timeout {GZ_SERVICE_TIMEOUT_MS} "
             f"--req '{req}'"
         ),
     ]
-    result = run(cmd, timeout=0.45)
-    if result.returncode not in (0, 124):
+    result = run(cmd, timeout=POSE_COMMAND_TIMEOUT_SECONDS)
+    if result.returncode != 0:
         print(result.stdout, end="", flush=True)
 
 
@@ -213,12 +222,12 @@ def set_model_pose(model, x, y, z, yaw=0.0):
             "-s /world/warehouse_mobile/set_pose "
             "--reqtype gz.msgs.Pose "
             "--reptype gz.msgs.Boolean "
-            "--timeout 1000 "
+            f"--timeout {GZ_SERVICE_TIMEOUT_MS} "
             f"--req '{req}'"
         ),
     ]
-    result = run(cmd, timeout=0.45)
-    if result.returncode not in (0, 124):
+    result = run(cmd, timeout=POSE_COMMAND_TIMEOUT_SECONDS)
+    if result.returncode != 0:
         print(result.stdout, end="", flush=True)
 
 

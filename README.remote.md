@@ -62,6 +62,27 @@ If you need a separate policy run instead of route replay, click `Run warehouse 
 - action: linear and angular velocity commands;
 - update: pose integration and goal switching when the current waypoint is reached.
 
+If you need the map-based task mode, click `Start Nav2 map task mode`, then open:
+
+```text
+http://localhost:8080/nav2
+```
+
+The map window lets you:
+
+- choose `ProductR`, `ProductG`, or `ProductB`;
+- click a drop point on the map;
+- draw keepout/avoid zones as rectangles;
+- send a `TaskGoal` so the robot plans to the shelf pickup pose, logs `pick_up`, then drives to the selected drop point and logs `drop_off`.
+
+This mode generates Nav2-compatible artifacts in:
+
+```text
+./aic_results/nav2_warehouse_map/
+```
+
+Generated files include `warehouse_map.yaml/.pgm`, `keepout_mask.yaml/.pgm`, `nav2_params.yaml`, and `nav_to_pose_and_pause_near_goal_obstacle.xml`. The current container mode also includes a built-in A* fallback controller so the task can run even if the base AIC image does not include the full Nav2 stack.
+
 If you do not need RViz/Gazebo windows, click `Start headless`. The equivalent command is:
 
 ```bash

@@ -1,0 +1,12 @@
+{
+  "command": [
+    "python3",
+    "/opt/aic_web/warehouse_nav2_mode.py"
+  ],
+  "created_at": "2026-05-09 22:23:39",
+  "finished_at": "2026-05-09 22:24:26",
+  "id": "90d5c9d85428",
+  "kind": "warehouse_nav2",
+  "returncode": 0,
+  "status": "finished"
+}
