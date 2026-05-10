@@ -256,16 +256,7 @@ class GazeboDriveProjector:
         self.set_model_pose(self.robot_model, pose.x, pose.y, BASE_Z_M, pose.yaw)
 
     def set_wheel_poses(self, pose):
-        if self.odom is None:
-            return
-        wheels = (
-            ("wheel_left", 0.0, WHEEL_Y_M, self.odom.left_angle),
-            ("wheel_right", 0.0, -WHEEL_Y_M, self.odom.right_angle),
-        )
-        for name, forward, left, spin in wheels:
-            x, y = world_offset(pose, forward, left)
-            q = quaternion_from_euler(math.pi / 2.0 + spin, 0.0, pose.yaw)
-            self.set_model_pose_quat(name, x, y, WHEEL_Z_M, q)
+        return
 
     def map_cell(self, pose):
         if not self.map_origin or not self.map_resolution:
@@ -331,4 +322,4 @@ def wheel_model(name):
 
 
 def wheel_models():
-    return "".join(wheel_model(name) for name in ("wheel_left", "wheel_right"))
+    return ""

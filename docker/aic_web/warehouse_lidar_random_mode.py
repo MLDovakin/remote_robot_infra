@@ -34,12 +34,12 @@ ROBOT_RADIUS = 0.48
 LIDAR_RANGE = 5.2
 LIDAR_RAYS = 144
 LIDAR_VISUAL_RAYS = 48
-EXPLORE_STEP_SECONDS = 0.010
-TASK_STEP_SECONDS = 0.010
-ODOM_DT_SECONDS = 0.080
+EXPLORE_STEP_SECONDS = 0.004
+TASK_STEP_SECONDS = 0.006
+ODOM_DT_SECONDS = 0.350
 EXPLORE_SPEED = 3.4
 TASK_SPEED = 3.0
-POSE_SPACING = 1.45
+POSE_SPACING = 2.20
 GZ_SERVICE_TIMEOUT_MS = 1500
 POSE_COMMAND_TIMEOUT_SECONDS = 2.0
 MAPPED_COVERAGE = 0.82
@@ -353,6 +353,8 @@ def write_world(world):
         <inertial><mass>20</mass></inertial>
         <collision name="base_collision"><geometry><box><size>1.0 0.72 0.38</size></box></geometry></collision>
         <visual name="base_visual"><geometry><box><size>1.0 0.72 0.38</size></box></geometry><material><ambient>0.86 0.86 0.82 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material></visual>
+        <visual name="left_wheel_visual"><pose>0 0.46 -0.16 1.5708 0 0</pose><geometry><cylinder><radius>0.17</radius><length>0.12</length></cylinder></geometry><material><ambient>0.03 0.04 0.05 1</ambient><diffuse>0.04 0.05 0.06 1</diffuse></material></visual>
+        <visual name="right_wheel_visual"><pose>0 -0.46 -0.16 1.5708 0 0</pose><geometry><cylinder><radius>0.17</radius><length>0.12</length></cylinder></geometry><material><ambient>0.03 0.04 0.05 1</ambient><diffuse>0.04 0.05 0.06 1</diffuse></material></visual>
         <visual name="fork_left"><pose>0.63 0.18 -0.20 0 0 0</pose><geometry><box><size>0.75 0.07 0.06</size></box></geometry><material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material></visual>
         <visual name="fork_right"><pose>0.63 -0.18 -0.20 0 0 0</pose><geometry><box><size>0.75 0.07 0.06</size></box></geometry><material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material></visual>
         <visual name="lidar"><pose>0.30 0 0.40 0 0 0</pose><geometry><cylinder><radius>0.15</radius><length>0.14</length></cylinder></geometry><material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.02 0.02 0.02 1</diffuse></material></visual>
@@ -614,7 +616,12 @@ def move_path(path, pose, world, known, true_occupied, reachable, status, messag
         steps = max(1, int(dist / POSE_SPACING))
         yaw = math.atan2(dy, dx) if dist > 0.01 else current.yaw
         for _ in range(steps):
-            current = Pose2D(current.x + dx / steps, current.y + dy / steps, yaw)
+            candidate = Pose2D(current.x + dx / steps, current.y + dy / steps, yaw)
+            if world_to_grid(candidate.x, candidate.y) in true_occupied:
+                lidar = simulate_lidar(current, true_occupied, known)
+                write_state(world, known, current, status, "blocked by shelf; replanning", reachable, path, task, lidar)
+                return current
+            current = candidate
             set_robot_pose(current)
             if cargo:
                 set_cargo_visible(current, cargo)
@@ -624,7 +631,7 @@ def move_path(path, pose, world, known, true_occupied, reachable, status, messag
     return Pose2D(path[-1].x, path[-1].y, path[-1].yaw if path else current.yaw)
 
 
-def execute_task(task, pose, world, known, reachable):
+def execute_task(task, pose, world, known, true_occupied, reachable):
     if coverage(known, reachable) < MAPPED_COVERAGE:
         write_state(world, known, pose, "mapping", "TaskGoal locked until lidar exploration finishes", reachable, task=task)
         return pose
@@ -636,7 +643,7 @@ def execute_task(task, pose, world, known, reachable):
         return pose
     drop = task.get("drop") or {}
     keepouts = [Rect(f"keepout_{i}", float(k["x1"]), float(k["y1"]), float(k["x2"]), float(k["y2"]), "keepout") for i, k in enumerate(task.get("keepouts", []), 1)]
-    occ = known_occupied(known) | rect_occupancy(keepouts, ROBOT_RADIUS)
+    occ = true_occupied | known_occupied(known) | rect_occupancy(keepouts, ROBOT_RADIUS)
     pickup = Pose2D(product["pickup"]["x"], product["pickup"]["y"], product["pickup"]["yaw"])
     drop_pose = Pose2D(float(drop["x"]), float(drop["y"]), float(drop.get("yaw", 0.0)))
     p1 = astar(pose, pickup, occ)
@@ -722,7 +729,8 @@ def main():
                 status = "mapped"
                 write_state(world, known, pose, "mapped", "mapping complete; TaskGoal enabled", reachable, lidar=lidar)
             else:
-                _, path = frontier_goal(pose, known, known_occupied(known), reachable)
+                planning_occupied = true_occupied | known_occupied(known)
+                _, path = frontier_goal(pose, known, planning_occupied, reachable)
                 if path:
                     pose = move_path(path, pose, world, known, true_occupied, reachable, "mapping", "frontier exploration", None, None, fast=True)
                 else:
@@ -734,7 +742,7 @@ def main():
                 if version != last_task_version:
                     last_task_version = version
                     try:
-                        pose = execute_task(read_json(TASK_FILE), pose, world, known, reachable)
+                        pose = execute_task(read_json(TASK_FILE), pose, world, known, true_occupied, reachable)
                         status = "mapped"
                     except (json.JSONDecodeError, KeyError, ValueError) as exc:
                         print(f"Task rejected: {exc}", flush=True)

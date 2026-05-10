@@ -639,13 +639,7 @@ def set_robot_pose(pose):
 
 
 def set_wheel_poses(pose, command):
-    wheels = [
-        ("wheel_left", 0.0, WHEEL_SEPARATION * 0.5, command.left_angle),
-        ("wheel_right", 0.0, -WHEEL_SEPARATION * 0.5, command.right_angle),
-    ]
-    for model, local_x, local_y, spin in wheels:
-        x, y = transform_body_to_world(pose, local_x, local_y)
-        set_model_pose_rpy(model, x, y, WHEEL_Z, math.pi / 2.0, spin, pose.yaw)
+    return
 
 
 def set_cargo_visible(pose):
