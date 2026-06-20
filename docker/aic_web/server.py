@@ -28,7 +28,7 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSES = {}
 LOCK = threading.Lock()
 
-SIMULATION_KINDS = {"eval_gui", "visual_only", "eval_headless", "warehouse_visual", "warehouse_policy", "warehouse_nav2", "lidar_random"}
+SIMULATION_KINDS = {"eval_gui", "visual_only", "eval_headless", "warehouse_visual", "warehouse_policy", "warehouse_nav2", "lidar_random", "vla_gazebo"}
 SINGLETON_KINDS = SIMULATION_KINDS | {"wave_policy"}
 
 
@@ -66,6 +66,10 @@ COMMANDS = {
     "lidar_random": [
         "python3",
         "/opt/aic_web/warehouse_lidar_random_mode.py",
+    ],
+    "vla_gazebo": [
+        "python3",
+        "/opt/aic_web/vla_gazebo_bridge.py",
     ],
     "eval_headless": [
         "/entrypoint.sh",
@@ -357,6 +361,7 @@ def lidar_random_state():
         "robot": {"x": -10.6, "y": -7.0, "yaw": 0.0},
         "true_obstacles": [],
         "products": {},
+        "pickup_status": {"selected_product": None, "selected": None, "products": {}},
         "path": [],
         "task": None,
         "lidar": [],
@@ -366,12 +371,13 @@ def lidar_random_state():
 
 def write_lidar_random_task(task):
     state = lidar_random_state()
-    if state.get("status") not in {"mapped", "done"}:
-        raise ValueError("TaskGoal is locked until lidar mapping completes")
     products = state.get("products") or {"ProductR": {}, "ProductG": {}, "ProductB": {}}
     product = task.get("product") or next(iter(products))
     if product not in products:
         raise ValueError(f"unknown product: {product}")
+    product_status = ((state.get("pickup_status") or {}).get("products") or {}).get(product, {})
+    if state.get("status") not in {"mapped", "done"} and not product_status.get("discovered"):
+        raise ValueError("TaskGoal is locked until the selected shelf is detected by lidar")
     drop = task.get("drop")
     if not isinstance(drop, dict):
         raise ValueError("drop point is required")
@@ -443,6 +449,7 @@ INDEX = r"""<!doctype html>
           <button onclick="startRun('warehouse_policy')">Run warehouse policy</button>
           <button onclick="startRun('warehouse_nav2')">Start Nav2 map task mode</button>
           <button onclick="startRun('lidar_random')">Start Lidar Random Map</button>
+          <button onclick="startRun('vla_gazebo')">Start VLA Gazebo bridge</button>
           <button onclick="startRun('eval_headless')">Start headless</button>
           <button onclick="startRun('wave_policy')">Run WaveArm</button>
           <button onclick="startRun('warehouse_demo')">Run text warehouse demo</button>
@@ -767,6 +774,12 @@ LIDAR_RANDOM_INDEX = r"""<!doctype html>
     .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .muted { color:var(--muted); }
     .stat { padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; }
+    .pickup-card { margin:10px 0; padding:10px; border:1px solid var(--line); border-radius:8px; background:#111519; font-size:13px; }
+    .pickup-card.ready { border-color:#2f8f68; background:#102019; }
+    .pickup-card.waiting { border-color:#6b5b25; background:#201b10; }
+    .pickup-card.picked { border-color:#3a7bc2; background:#101a25; }
+    .pickup-title { display:flex; justify-content:space-between; gap:8px; margin-bottom:6px; }
+    .badge { display:inline-block; padding:2px 7px; border-radius:999px; background:#29313a; color:#dce5ec; font-size:12px; white-space:nowrap; }
     .bar { height:8px; background:#0c0e10; border:1px solid var(--line); border-radius:999px; overflow:hidden; margin-top:8px; }
     .bar > div { height:100%; background:#4fb38a; width:0%; }
     pre { margin:10px 0 0; max-height:250px; overflow:auto; background:#070809; border:1px solid var(--line); border-radius:8px; padding:10px; white-space:pre-wrap; font-size:12px; }
@@ -785,8 +798,12 @@ LIDAR_RANDOM_INDEX = r"""<!doctype html>
       <div class="stat"><strong>Coverage:</strong> <span id="coverage">0%</span><div class="bar"><div id="coverageBar"></div></div></div>
       <div class="stat"><strong>Robot:</strong> <span id="robot">-</span></div>
       <div class="stat"><strong>Drop:</strong> <span id="dropText">click map after mapping</span></div>
+      <div id="pickupCard" class="pickup-card waiting">
+        <div class="pickup-title"><strong>Package pickup</strong><span id="pickupBadge" class="badge">waiting</span></div>
+        <div id="pickupText" class="muted">Select an item; TaskGoal can start when its shelf is detected by lidar.</div>
+      </div>
       <label for="product">Item</label>
-      <select id="product"></select>
+      <select id="product" onchange="updatePickupCard(); draw();"></select>
       <label>Map edit mode</label>
       <div class="row">
         <button id="dropMode" class="primary" onclick="setMode('drop')">TaskGoal drop</button>
@@ -860,8 +877,14 @@ LIDAR_RANDOM_INDEX = r"""<!doctype html>
       if (state && state.products) {
         for (const [name, item] of Object.entries(state.products)) {
           const p = worldToCanvas(item.slot.x, item.slot.y);
+          const status = state.pickup_status && state.pickup_status.products ? state.pickup_status.products[name] : null;
           ctx.fillStyle = name.endsWith('R') ? '#d04436' : name.endsWith('G') ? '#25a657' : name.endsWith('B') ? '#2e5bd7' : '#c6a11c';
           ctx.beginPath(); ctx.arc(p.x, p.y, 7, 0, Math.PI * 2); ctx.fill();
+          if (status && status.discovered) {
+            ctx.strokeStyle = status.picked ? '#2d7dd2' : '#23b26b';
+            ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.arc(p.x, p.y, 13, 0, Math.PI * 2); ctx.stroke();
+          }
           ctx.fillStyle = '#101214'; ctx.font = '12px sans-serif'; ctx.fillText(name, p.x + 9, p.y - 7);
         }
       }
@@ -886,8 +909,11 @@ LIDAR_RANDOM_INDEX = r"""<!doctype html>
     async function api(path, opts) { const r = await fetch(path, opts); if (!r.ok) throw new Error(await r.text()); return await r.json(); }
     async function sendTask() {
       if (!drop) return alert('Set drop point first.');
-      if (!state || !['mapped','done'].includes(state.status)) return alert('TaskGoal is locked until lidar mapping completes.');
-      const payload = {product:document.getElementById('product').value, drop, keepouts};
+      const selectedProduct = document.getElementById('product').value;
+      const productStatus = state && state.pickup_status && state.pickup_status.products ? state.pickup_status.products[selectedProduct] : null;
+      const canStart = state && (['mapped','done'].includes(state.status) || (productStatus && productStatus.discovered));
+      if (!canStart) return alert('TaskGoal is locked until the selected shelf is detected by lidar.');
+      const payload = {product:selectedProduct, drop, keepouts};
       const result = await api('/api/lidar-random/task', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(payload)});
       document.getElementById('details').textContent = JSON.stringify(result, null, 2);
     }
@@ -896,12 +922,38 @@ LIDAR_RANDOM_INDEX = r"""<!doctype html>
       const current = select.value;
       const names = Object.keys((state && state.products) || {});
       if (!names.length) return;
-      select.innerHTML = names.map(n => `<option value="${n}">${n} / ${state.products[n].storage}</option>`).join('');
-      if (names.includes(current)) select.value = current;
+      const statuses = state && state.pickup_status ? state.pickup_status.products || {} : {};
+      select.innerHTML = names.map(n => {
+        const s = statuses[n] || {};
+        const suffix = s.picked ? 'picked' : s.discovered ? 'lidar found' : 'not found';
+        return `<option value="${n}">${n} / ${state.products[n].storage} / ${suffix}</option>`;
+      }).join('');
+      const preferred = state && state.task && names.includes(state.task.product) ? state.task.product : current;
+      if (names.includes(preferred)) select.value = preferred;
+    }
+    function updatePickupCard() {
+      const selectedProduct = document.getElementById('product').value;
+      const statuses = state && state.pickup_status ? state.pickup_status.products || {} : {};
+      const s = statuses[selectedProduct] || null;
+      const card = document.getElementById('pickupCard');
+      const badge = document.getElementById('pickupBadge');
+      const text = document.getElementById('pickupText');
+      if (!s) {
+        card.className = 'pickup-card waiting';
+        badge.textContent = 'waiting';
+        text.textContent = 'Waiting for lidar state.';
+        return;
+      }
+      const picked = !!s.picked;
+      card.className = picked ? 'pickup-card picked' : s.discovered ? 'pickup-card ready' : 'pickup-card waiting';
+      badge.textContent = picked ? 'picked' : s.discovered ? 'lidar found' : 'not found';
+      const seen = Math.round((s.known_ratio || 0) * 100);
+      text.textContent = `${s.product} at ${s.storage}: ${s.message || s.phase}; shelf known ${seen}%, occupied hits ${s.occupied_hits || 0}.`;
     }
     async function poll() {
       state = await api('/api/lidar-random/state');
       refreshProducts();
+      updatePickupCard();
       const cov = Math.round((state.coverage || 0) * 100);
       document.getElementById('status').textContent = `${state.status}: ${state.message || ''}`;
       document.getElementById('coverage').textContent = `${cov}%`;

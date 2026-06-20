@@ -34,6 +34,9 @@ ROBOT_RADIUS = 0.48
 LIDAR_RANGE = 5.2
 LIDAR_RAYS = 144
 LIDAR_VISUAL_RAYS = 48
+# VLA action-space normalizers (must match collect_dataset.py)
+STEP_MAX = 0.25
+YAW_MAX = 0.60
 EXPLORE_STEP_SECONDS = 0.004
 TASK_STEP_SECONDS = 0.006
 ODOM_DT_SECONDS = 0.350
@@ -45,6 +48,12 @@ POSE_COMMAND_TIMEOUT_SECONDS = 2.0
 MAPPED_COVERAGE = 0.82
 HIDDEN_Z = -10.0
 DRIVE = None
+AUTO_PICKUP_FIRST_SHELF = True
+
+DISPATCH_ZONES = [
+    {"name": "DispatchA", "x": -8.4, "y": -6.5, "yaw": math.pi},
+    {"name": "DispatchB", "x": -8.4, "y": 7.0, "yaw": math.pi},
+]
 
 IGNORED_GAZEBO_LOG_LINES = (
     "NodeShared::RecvSrvRequest() error sending response: Host unreachable",
@@ -113,6 +122,10 @@ def normalize(angle):
     while angle < -math.pi:
         angle += 2.0 * math.pi
     return angle
+
+
+# Alias used by the VLA bridge, which mirrors collect_dataset.py naming.
+normalize_angle = normalize
 
 
 def world_to_grid(x, y):
@@ -448,6 +461,35 @@ def simulate_lidar(pose, true_occupied, known):
     return endpoints
 
 
+def simulate_lidar_ranges(pose, true_occupied, known):
+    """Return 144 range values (m). Updates known occupancy as side effect.
+
+    Matches collect_dataset.simulate_lidar_ranges so the VLA model sees the
+    same lidar encoding it was trained on.
+    """
+    ranges = []
+    px, py = world_to_grid(pose.x, pose.y)
+    max_steps = int(LIDAR_RANGE / RESOLUTION)
+    for i in range(LIDAR_RAYS):
+        angle = pose.yaw - math.pi + (2 * math.pi * i / LIDAR_RAYS)
+        hit_range = LIDAR_RANGE
+        for step in range(1, max_steps + 1):
+            x = pose.x + math.cos(angle) * step * RESOLUTION
+            y = pose.y + math.sin(angle) * step * RESOLUTION
+            gx, gy = world_to_grid(x, y)
+            if gx <= 0 or gy <= 0 or gx >= GRID_W - 1 or gy >= GRID_H - 1:
+                hit_range = step * RESOLUTION
+                break
+            known[gy][gx] = 0
+            if (gx, gy) in true_occupied:
+                known[gy][gx] = 1
+                hit_range = step * RESOLUTION
+                break
+        ranges.append(round(hit_range, 3))
+    known[py][px] = 0
+    return ranges
+
+
 def known_occupied(known):
     occ = set()
     for gy, row in enumerate(known):
@@ -551,6 +593,103 @@ def show_delivered(x, y):
     set_model_pose("delivered_item", x, y, 0.28)
 
 
+def storage_rect(world, storage_name):
+    for rect in world["rects"]:
+        if rect.name == storage_name:
+            return rect
+    return None
+
+
+def rect_known_counts(rect, known, inflate=0.0):
+    if not rect:
+        return {"total": 0, "known": 0, "occupied": 0}
+    r = rect.inflated(inflate).normalized()
+    gx1, gy1 = world_to_grid(r.x1, r.y1)
+    gx2, gy2 = world_to_grid(r.x2, r.y2)
+    total = known_count = occupied_count = 0
+    for gy in range(min(gy1, gy2), max(gy1, gy2) + 1):
+        for gx in range(min(gx1, gx2), max(gx1, gx2) + 1):
+            total += 1
+            value = known[gy][gx]
+            if value != -1:
+                known_count += 1
+            if value == 1:
+                occupied_count += 1
+    return {"total": total, "known": known_count, "occupied": occupied_count}
+
+
+def product_lidar_statuses(world, known, task=None):
+    statuses = {}
+    selected = task.get("product") if task else None
+    override = (task or {}).get("pickup_status") or {}
+    for name, product in world["products"].items():
+        rect = storage_rect(world, product["storage"])
+        counts = rect_known_counts(rect, known, ROBOT_RADIUS)
+        known_ratio = counts["known"] / counts["total"] if counts["total"] else 0.0
+        discovered = counts["occupied"] > 0 or known_ratio >= 0.08
+        status = {
+            "product": name,
+            "storage": product["storage"],
+            "discovered": discovered,
+            "known_ratio": known_ratio,
+            "occupied_hits": counts["occupied"],
+            "picked": False,
+            "phase": "available" if discovered else "waiting_for_lidar",
+            "message": "shelf detected by lidar" if discovered else "waiting until lidar detects this shelf",
+        }
+        if name == selected and override:
+            status.update(override)
+        statuses[name] = status
+    return statuses
+
+
+def selected_pickup_status(world, known, task=None):
+    statuses = product_lidar_statuses(world, known, task)
+    selected = task.get("product") if task else None
+    return {
+        "selected_product": selected,
+        "selected": statuses.get(selected) if selected else None,
+        "products": statuses,
+    }
+
+
+def product_shelf_discovered(world, known, product):
+    rect = storage_rect(world, product["storage"])
+    counts = rect_known_counts(rect, known, ROBOT_RADIUS)
+    known_ratio = counts["known"] / counts["total"] if counts["total"] else 0.0
+    return counts["occupied"] > 0 or known_ratio >= 0.08
+
+
+def set_task_pickup_status(task, product_name, phase, message, picked=False):
+    if task is None:
+        task = {}
+    task["pickup_status"] = {
+        "product": product_name,
+        "phase": phase,
+        "message": message,
+        "picked": picked,
+    }
+    return task
+
+
+def first_product_name(world):
+    return next(iter(world["products"]), None)
+
+
+def make_auto_pickup_task(world):
+    product_name = first_product_name(world)
+    if not product_name:
+        return None
+    product = world["products"][product_name]
+    task = {
+        "product": product_name,
+        "mode": "auto_first_shelf_direct_pickup",
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    set_task_pickup_status(task, product_name, "fixed_target", f"first shelf coordinates loaded: {product['storage']}", False)
+    return task
+
+
 def animate_pickup(product_name, product, pose, world, known, reachable, task):
     slot = product["slot"]
     sx, sy, sz = float(slot["x"]), float(slot["y"]), float(slot["z"])
@@ -559,12 +698,14 @@ def animate_pickup(product_name, product, pose, world, known, reachable, task):
     tz = 0.62
     yaw = pose.yaw
     print(f"pickup animation product={product_name} from shelf slot=({sx:.2f},{sy:.2f},{sz:.2f})", flush=True)
+    set_task_pickup_status(task, product_name, "lifting", f"lifting {product_name} from {product['storage']}", False)
     for i in range(1, 7):
         lift_z = sz + (1.95 - sz) * i / 6
         set_product_item_pose(product_name, sx, sy, lift_z, yaw)
         set_pickup_marker((sx + tx) / 2, (sy + ty) / 2, lift_z, yaw)
         write_state(world, known, pose, "executing", f"lifting {product_name} from {product['storage']}", reachable, task=task)
         time.sleep(0.08)
+    set_task_pickup_status(task, product_name, "transferring", f"transferring {product_name} onto robot forks", False)
     for i in range(1, 11):
         t = i / 10
         x = sx + (tx - sx) * t
@@ -576,6 +717,8 @@ def animate_pickup(product_name, product, pose, world, known, reachable, task):
         time.sleep(0.08)
     set_cargo_visible(pose, product_name)
     hide_pickup_marker()
+    set_task_pickup_status(task, product_name, "picked", f"{product_name} picked from {product['storage']}", True)
+    write_state(world, known, pose, "executing", f"{product_name} picked from {product['storage']}", reachable, task=task)
 
 
 def map_payload(world, known, pose, status, message, path=None, task=None, lidar=None):
@@ -593,6 +736,7 @@ def map_payload(world, known, pose, status, message, path=None, task=None, lidar
         "robot": {"x": pose.x, "y": pose.y, "yaw": pose.yaw},
         "true_obstacles": [r.as_dict() for r in world["rects"]],
         "products": world["products"],
+        "pickup_status": selected_pickup_status(world, known, task),
         "path": [{"x": p.x, "y": p.y, "yaw": p.yaw} for p in (path or [])],
         "task": task,
         "lidar": lidar or [],
@@ -631,16 +775,48 @@ def move_path(path, pose, world, known, true_occupied, reachable, status, messag
     return Pose2D(path[-1].x, path[-1].y, path[-1].yaw if path else current.yaw)
 
 
+def move_direct(path, pose, world, known, true_occupied, reachable, status, message, task=None, cargo=None, fast=False):
+    current = pose
+    for target in path[1:]:
+        dx = target.x - current.x
+        dy = target.y - current.y
+        dist = math.hypot(dx, dy)
+        yaw_delta = normalize(target.yaw - current.yaw)
+        steps = max(1, int(dist / POSE_SPACING))
+        segment_start = current
+        for step in range(1, steps + 1):
+            ratio = step / steps
+            current = Pose2D(
+                segment_start.x + dx * ratio,
+                segment_start.y + dy * ratio,
+                normalize(segment_start.yaw + yaw_delta * ratio),
+            )
+            set_robot_pose(current)
+            if cargo:
+                set_cargo_visible(current, cargo)
+            lidar = simulate_lidar(current, true_occupied, known)
+            write_state(world, known, current, status, message, reachable, path, task, lidar)
+            time.sleep(EXPLORE_STEP_SECONDS if fast else TASK_STEP_SECONDS)
+    return Pose2D(path[-1].x, path[-1].y, path[-1].yaw if path else current.yaw)
+
+
 def execute_task(task, pose, world, known, true_occupied, reachable):
-    if coverage(known, reachable) < MAPPED_COVERAGE:
-        write_state(world, known, pose, "mapping", "TaskGoal locked until lidar exploration finishes", reachable, task=task)
-        return pose
+    task = dict(task)
     products = world["products"]
     product_name = task.get("product", next(iter(products)))
     product = products.get(product_name)
     if not product:
         write_state(world, known, pose, "failed", f"unknown product {product_name}", reachable, task=task)
         return pose
+    target_discovered = product_shelf_discovered(world, known, product)
+    if coverage(known, reachable) < MAPPED_COVERAGE and not target_discovered:
+        set_task_pickup_status(task, product_name, "waiting_for_lidar", f"{product['storage']} is not detected by lidar yet", False)
+        write_state(world, known, pose, "mapping", "TaskGoal locked until target shelf is discovered by lidar", reachable, task=task)
+        return pose
+    if target_discovered and coverage(known, reachable) < MAPPED_COVERAGE:
+        task["priority_reason"] = f"{product['storage']} already detected by lidar; interrupting exploration"
+        set_task_pickup_status(task, product_name, "switching_to_pickup", f"switching from exploration to pickup at {product['storage']}", False)
+        write_state(world, known, pose, "executing", f"switching to TaskGoal pickup: {product['storage']} already detected by lidar", reachable, task=task)
     drop = task.get("drop") or {}
     keepouts = [Rect(f"keepout_{i}", float(k["x1"]), float(k["y1"]), float(k["x2"]), float(k["y2"]), "keepout") for i, k in enumerate(task.get("keepouts", []), 1)]
     occ = true_occupied | known_occupied(known) | rect_occupancy(keepouts, ROBOT_RADIUS)
@@ -653,15 +829,41 @@ def execute_task(task, pose, world, known, true_occupied, reachable):
         return pose
     full = p1 + p2[1:]
     print(f"TaskGoal accepted product={product_name} pickup=({pickup.x:.2f},{pickup.y:.2f}) drop=({drop_pose.x:.2f},{drop_pose.y:.2f})", flush=True)
+    set_task_pickup_status(task, product_name, "driving_to_pickup", f"driving to {product['storage']}", False)
     pose = move_path(p1, pose, world, known, occ, reachable, "executing", "driving to pickup", task, None, fast=False)
     print(f"pick_up product={product_name} storage={product['storage']}", flush=True)
     animate_pickup(product_name, product, pose, world, known, reachable, task)
+    set_task_pickup_status(task, product_name, "picked_driving_to_drop", f"{product_name} picked; driving to drop", True)
     pose = move_path(p2, pose, world, known, occ, reachable, "executing", "driving to drop", task, product_name, fast=False)
     set_product_item_pose(product_name, drop_pose.x, drop_pose.y, 0.38, drop_pose.yaw)
     show_delivered(drop_pose.x, drop_pose.y)
     print(f"drop_off product={product_name} target=({drop_pose.x:.2f},{drop_pose.y:.2f})", flush=True)
+    set_task_pickup_status(task, product_name, "delivered", f"{product_name} delivered", True)
     write_state(world, known, pose, "done", "task completed", reachable, full, task)
     return pose
+
+
+def execute_auto_pickup(task, pose, world, known, true_occupied, reachable):
+    product_name = task.get("product")
+    product = world["products"].get(product_name)
+    if not product:
+        return pose, False
+    pickup = Pose2D(product["pickup"]["x"], product["pickup"]["y"], product["pickup"]["yaw"])
+    path = [pose, pickup]
+    task["priority_reason"] = f"first shelf {product['storage']} coordinates are known; driving directly without lidar or A*"
+    set_task_pickup_status(task, product_name, "driving_direct_to_first_shelf", f"driving directly to known coordinates of {product['storage']}", False)
+    write_state(world, known, pose, "executing", f"driving directly to first shelf: {product['storage']} coordinates are known", reachable, path, task)
+    print(
+        f"auto_pickup_direct target={product_name} storage={product['storage']} "
+        f"pickup=({pickup.x:.2f},{pickup.y:.2f},{pickup.yaw:.2f}) planner=none lidar_gate=false",
+        flush=True,
+    )
+    pose = move_direct(path, pose, world, known, true_occupied, reachable, "executing", "driving directly to first shelf", task, None, fast=False)
+    print(f"auto_pickup pick_up product={product_name} storage={product['storage']}", flush=True)
+    animate_pickup(product_name, product, pose, world, known, reachable, task)
+    set_task_pickup_status(task, product_name, "picked_continuing_mapping", f"{product_name} picked from first shelf; continuing exploration", True)
+    write_state(world, known, pose, "mapping", f"{product_name} picked from first shelf; continuing lidar exploration", reachable, task=task)
+    return pose, True
 
 
 def forward_gazebo_output(proc):
@@ -689,7 +891,10 @@ def main():
     reachable = reachable_free_cells(world["start"], true_occupied)
     known = [[-1 for _ in range(GRID_W)] for _ in range(GRID_H)]
     pose = world["start"]
-    write_state(world, known, pose, "starting", f"generated random map seed={seed}", reachable)
+    auto_task = make_auto_pickup_task(world) if AUTO_PICKUP_FIRST_SHELF else None
+    auto_pickup_done = False
+    carried_product = None
+    write_state(world, known, pose, "starting", f"generated random map seed={seed}", reachable, task=auto_task)
 
     env = os.environ.copy()
     env.setdefault("DISPLAY", ":1")
@@ -698,7 +903,15 @@ def main():
 
     print("Starting Lidar Random Map mode")
     print(f"Generated random world seed={seed}")
-    print("Exploration must complete before TaskGoal is accepted.")
+    if auto_task:
+        product = world["products"][auto_task["product"]]
+        pickup = product["pickup"]
+        print(
+            f"Fixed first shelf pickup target={auto_task['product']} storage={product['storage']} "
+            f"pickup=({pickup['x']:.2f},{pickup['y']:.2f},{pickup['yaw']:.2f}) planner=none lidar_gate=false",
+            flush=True,
+        )
+    print("Auto pickup uses known first-shelf coordinates before lidar exploration continues.")
     gz = launch_gazebo(env)
 
     def shutdown(signum, frame):
@@ -717,6 +930,10 @@ def main():
     hide_cargo()
     hide_delivered()
     hide_pickup_marker()
+    if auto_task and not auto_pickup_done:
+        pose, auto_pickup_done = execute_auto_pickup(auto_task, pose, world, known, true_occupied, reachable)
+        if auto_pickup_done:
+            carried_product = auto_task["product"]
 
     last_task_version = TASK_FILE.stat().st_mtime_ns if TASK_FILE.exists() else None
     status = "mapping"
@@ -724,18 +941,32 @@ def main():
         lidar = simulate_lidar(pose, true_occupied, known)
         cov = coverage(known, reachable)
         if status == "mapping":
-            write_state(world, known, pose, status, f"exploring with lidar {cov:.0%}", reachable, lidar=lidar)
+            write_state(world, known, pose, status, f"exploring with lidar {cov:.0%}", reachable, task=auto_task, lidar=lidar)
+            if TASK_FILE.exists():
+                version = TASK_FILE.stat().st_mtime_ns
+                if version != last_task_version:
+                    last_task_version = version
+                    try:
+                        task = read_json(TASK_FILE)
+                        product = world["products"].get(task.get("product"))
+                        can_interrupt = cov >= MAPPED_COVERAGE or (product and product_shelf_discovered(world, known, product))
+                        pose = execute_task(task, pose, world, known, true_occupied, reachable)
+                        if can_interrupt:
+                            status = "mapped"
+                            continue
+                    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+                        print(f"Task rejected: {exc}", flush=True)
             if cov >= MAPPED_COVERAGE:
                 status = "mapped"
-                write_state(world, known, pose, "mapped", "mapping complete; TaskGoal enabled", reachable, lidar=lidar)
+                write_state(world, known, pose, "mapped", "mapping complete; TaskGoal enabled", reachable, task=auto_task, lidar=lidar)
             else:
                 planning_occupied = true_occupied | known_occupied(known)
                 _, path = frontier_goal(pose, known, planning_occupied, reachable)
                 if path:
-                    pose = move_path(path, pose, world, known, true_occupied, reachable, "mapping", "frontier exploration", None, None, fast=True)
+                    pose = move_path(path, pose, world, known, true_occupied, reachable, "mapping", "frontier exploration", auto_task, carried_product, fast=True)
                 else:
                     status = "mapped"
-                    write_state(world, known, pose, "mapped", "no more frontiers; TaskGoal enabled", reachable, lidar=lidar)
+                    write_state(world, known, pose, "mapped", "no more frontiers; TaskGoal enabled", reachable, task=auto_task, lidar=lidar)
         else:
             if TASK_FILE.exists():
                 version = TASK_FILE.stat().st_mtime_ns
@@ -746,7 +977,7 @@ def main():
                         status = "mapped"
                     except (json.JSONDecodeError, KeyError, ValueError) as exc:
                         print(f"Task rejected: {exc}", flush=True)
-            write_state(world, known, pose, status, "mapping complete; waiting for TaskGoal", reachable, lidar=lidar)
+            write_state(world, known, pose, status, "mapping complete; waiting for TaskGoal", reachable, task=auto_task, lidar=lidar)
             time.sleep(0.25)
     return gz.returncode
 

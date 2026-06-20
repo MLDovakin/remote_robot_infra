@@ -25,4 +25,7 @@ services:
     volumes:
       - ./aic_results:/workspace/aic_results
       - ./aic_runs:/workspace/aic_runs
+      # Live-mount the web/sim source so new modes (e.g. the VLA bridge) and
+      # edits are picked up without rebuilding the image.
+      - ./docker/aic_web:/opt/aic_web
     restart: unless-stopped

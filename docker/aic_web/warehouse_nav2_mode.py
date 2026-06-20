@@ -3,6 +3,7 @@ import heapq
 import json
 import math
 import os
+import random
 import signal
 import subprocess
 import sys
@@ -12,13 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-WORLD = Path("/opt/aic_web/warehouse_visual.sdf")
 AIC_SETUP = Path("/ws_aic/install/setup.bash")
 RUNS_DIR = Path(os.environ.get("AIC_RUNS_DIR", "/workspace/aic_runs"))
 RESULTS_DIR = Path(os.environ.get("AIC_RESULTS_DIR", "/workspace/aic_results"))
 STATE_FILE = RUNS_DIR / "nav2_state.json"
 TASK_FILE = RUNS_DIR / "nav2_task.json"
 MAP_DIR = RESULTS_DIR / "nav2_warehouse_map"
+WORLD = MAP_DIR / "nav2_detailed_world.sdf"
 
 ORIGIN_X = -11.0
 ORIGIN_Y = -8.0
@@ -188,6 +189,181 @@ def transform_body_to_world(pose, local_x, local_y):
     c = math.cos(pose.yaw)
     s = math.sin(pose.yaw)
     return pose.x + c * local_x - s * local_y, pose.y + s * local_x + c * local_y
+
+
+def material(kind):
+    colors = {
+        "wall": ("0.66 0.66 0.64 1", "0.76 0.76 0.74 1"),
+        "floor": ("0.50 0.50 0.47 1", "0.68 0.68 0.63 1"),
+        "shelf": ("0.70 0.52 0.18 1", "0.96 0.70 0.18 1"),
+        "rack_frame": ("0.03 0.04 0.05 1", "0.05 0.06 0.07 1"),
+        "crate": ("0.44 0.28 0.11 1", "0.62 0.42 0.18 1"),
+        "box_dark": ("0.30 0.21 0.10 1", "0.44 0.32 0.14 1"),
+        "label": ("0.86 0.86 0.76 1", "0.98 0.96 0.84 1"),
+        "barcode": ("0.02 0.02 0.02 1", "0.02 0.02 0.02 1"),
+        "marking": ("0.04 0.45 0.16 1", "0.04 0.55 0.20 1"),
+        "hazard": ("0.90 0.75 0.03 1", "1.00 0.84 0.04 1"),
+        "dispatch_a": ("0.12 0.62 0.42 1", "0.16 0.78 0.52 1"),
+        "dispatch_b": ("0.12 0.45 0.78 1", "0.20 0.62 0.94 1"),
+        "productr": ("0.72 0.05 0.04 1", "0.95 0.08 0.06 1"),
+        "productg": ("0.02 0.45 0.14 1", "0.03 0.70 0.22 1"),
+        "productb": ("0.04 0.17 0.64 1", "0.08 0.28 0.95 1"),
+        "producty": ("0.75 0.58 0.03 1", "0.98 0.78 0.06 1"),
+    }
+    ambient, diffuse = colors.get(kind, colors["crate"])
+    return f"<material><ambient>{ambient}</ambient><diffuse>{diffuse}</diffuse></material>"
+
+
+def model_box(name, x, y, z, sx, sy, sz, kind, static=True, collision=True):
+    collision_xml = ""
+    if collision:
+        collision_xml = f'<collision name="collision"><geometry><box><size>{sx:.3f} {sy:.3f} {sz:.3f}</size></box></geometry></collision>'
+    return f"""
+    <model name="{name}">
+      <static>{str(static).lower()}</static>
+      <pose>{x:.3f} {y:.3f} {z:.3f} 0 0 0</pose>
+      <link name="link">
+        {collision_xml}
+        <visual name="visual"><geometry><box><size>{sx:.3f} {sy:.3f} {sz:.3f}</size></box></geometry>{material(kind)}</visual>
+      </link>
+    </model>"""
+
+
+def visual_box(name, x, y, z, sx, sy, sz, kind):
+    return f"""
+        <visual name="{name}">
+          <pose>{x:.3f} {y:.3f} {z:.3f} 0 0 0</pose>
+          <geometry><box><size>{sx:.3f} {sy:.3f} {sz:.3f}</size></box></geometry>
+          {material(kind)}
+        </visual>"""
+
+
+def visual_box_pose(name, x, y, z, sx, sy, sz, yaw, kind):
+    return f"""
+        <visual name="{name}">
+          <pose>{x:.3f} {y:.3f} {z:.3f} 0 0 {yaw:.3f}</pose>
+          <geometry><box><size>{sx:.3f} {sy:.3f} {sz:.3f}</size></box></geometry>
+          {material(kind)}
+        </visual>"""
+
+
+def rack_model(rect):
+    r = rect.normalized()
+    cx = (r.x1 + r.x2) / 2
+    cy = (r.y1 + r.y2) / 2
+    sx = r.x2 - r.x1
+    sy = r.y2 - r.y1
+    seed = sum(ord(ch) for ch in rect.name)
+    rng = random.Random(seed)
+    visuals = []
+    post = 0.07
+    height = 2.05
+    for px in (-sx / 2 + post / 2, sx / 2 - post / 2):
+        for py in (-sy / 2 + post / 2, sy / 2 - post / 2):
+            visuals.append(visual_box(f"post_{len(visuals)}", px, py, height / 2, post, post, height, "rack_frame"))
+    for level, z in enumerate((0.42, 1.04, 1.66), 1):
+        visuals.append(visual_box(f"deck_{level}", 0, 0, z, sx + 0.14, sy + 0.18, 0.07, "shelf"))
+        box_count = 4 if sx > sy else 3
+        for box_index in range(box_count):
+            bx = -sx * 0.36 + box_index * (sx * 0.72 / max(1, box_count - 1))
+            bw = min(0.52, sx * 0.22)
+            bd = min(0.34, sy * 0.42)
+            bh = rng.uniform(0.25, 0.50)
+            by = rng.choice((-sy * 0.18, sy * 0.18))
+            visuals.append(visual_box(f"box_{level}_{box_index}", bx, by, z + 0.08 + bh / 2, bw, bd, bh, "crate"))
+            visuals.append(visual_box(f"label_{level}_{box_index}", bx, by - bd / 2 - 0.004, z + 0.10 + bh * 0.52, bw * 0.28, 0.012, bh * 0.38, "label"))
+            visuals.append(visual_box(f"barcode_{level}_{box_index}", bx + bw * 0.18, by - bd / 2 - 0.008, z + 0.10 + bh * 0.52, bw * 0.06, 0.014, bh * 0.34, "barcode"))
+    return f"""
+    <model name="{rect.name}">
+      <static>true</static>
+      <pose>{cx:.3f} {cy:.3f} 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><pose>0 0 {height / 2:.3f} 0 0 0</pose><geometry><box><size>{sx:.3f} {sy:.3f} {height:.3f}</size></box></geometry></collision>
+        {''.join(visuals)}
+      </link>
+    </model>"""
+
+
+def product_kind(name):
+    return name.lower()
+
+
+def product_model(name, slot):
+    return model_box(f"item_{name}", slot["x"], slot["y"], slot["z"], 0.42, 0.34, 0.30, product_kind(name), static=False)
+
+
+def write_detailed_world():
+    MAP_DIR.mkdir(parents=True, exist_ok=True)
+    models = [
+        model_box("floor", 0, 0, -0.04, WIDTH_M, HEIGHT_M, 0.08, "floor"),
+        model_box("dispatch_a_floor", -8.0, -4.0, 0.006, 2.4, 1.4, 0.012, "dispatch_a", collision=False),
+        model_box("dispatch_b_floor", -8.0, 4.0, 0.006, 2.4, 1.4, 0.012, "dispatch_b", collision=False),
+        model_box("main_aisle_left", -1.0, -6.75, 0.010, 18.4, 0.07, 0.014, "marking", collision=False),
+        model_box("main_aisle_right", -1.0, 6.75, 0.010, 18.4, 0.07, 0.014, "marking", collision=False),
+        model_box("dispatch_lane_a", -8.0, -4.92, 0.010, 3.2, 0.07, 0.014, "marking", collision=False),
+        model_box("dispatch_lane_b", -8.0, 4.92, 0.010, 3.2, 0.07, 0.014, "marking", collision=False),
+        model_box("pickup_hazard_front", 6.1, -5.05, 0.012, 3.2, 0.08, 0.016, "hazard", collision=False),
+        model_box("pickup_hazard_mid", 6.1, -1.05, 0.012, 3.2, 0.08, 0.016, "hazard", collision=False),
+        model_box("pickup_hazard_back", 6.1, 2.95, 0.012, 3.2, 0.08, 0.016, "hazard", collision=False),
+    ]
+    for rect in STATIC_OBSTACLES:
+        r = rect.normalized()
+        if "wall" in rect.name:
+            models.append(model_box(rect.name, (r.x1 + r.x2) / 2, (r.y1 + r.y2) / 2, 1.3, r.x2 - r.x1, r.y2 - r.y1, 2.6, "wall"))
+        else:
+            models.append(rack_model(rect))
+    for name, product in PRODUCTS.items():
+        models.append(product_model(name, product["slot"]))
+
+    lidar_visuals = [
+        """
+        <visual name="scan_disc">
+          <pose>0 0 0.035 0 0 0</pose>
+          <geometry><cylinder><radius>4.800</radius><length>0.010</length></cylinder></geometry>
+          <material><ambient>0.05 0.10 1.00 0.16</ambient><diffuse>0.05 0.10 1.00 0.16</diffuse><transparency>0.76</transparency></material>
+        </visual>"""
+    ]
+    for i in range(72):
+        angle = 2 * math.pi * i / 72
+        length = 4.8 * (0.58 + 0.42 * ((i % 4) / 3))
+        lidar_visuals.append(visual_box_pose(f"scan_ray_{i}", math.cos(angle) * length / 2, math.sin(angle) * length / 2, 0.055, length, 0.016, 0.016, angle, "productb"))
+
+    models.append(f"""
+    <model name="warehouse_robot">
+      <pose>-7.000 -5.000 0.320 0 0 0</pose>
+      <link name="base_link">
+        <inertial><mass>20</mass></inertial>
+        <collision name="base_collision"><geometry><box><size>1.0 0.72 0.38</size></box></geometry></collision>
+        <visual name="base_visual"><geometry><box><size>1.0 0.72 0.38</size></box></geometry><material><ambient>0.86 0.86 0.82 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material></visual>
+        <visual name="left_wheel_visual"><pose>0 0.46 -0.16 1.5708 0 0</pose><geometry><cylinder><radius>0.17</radius><length>0.12</length></cylinder></geometry><material><ambient>0.03 0.04 0.05 1</ambient><diffuse>0.04 0.05 0.06 1</diffuse></material></visual>
+        <visual name="right_wheel_visual"><pose>0 -0.46 -0.16 1.5708 0 0</pose><geometry><cylinder><radius>0.17</radius><length>0.12</length></cylinder></geometry><material><ambient>0.03 0.04 0.05 1</ambient><diffuse>0.04 0.05 0.06 1</diffuse></material></visual>
+        <visual name="cargo_bed"><pose>-0.18 0 0.24 0 0 0</pose><geometry><box><size>0.48 0.52 0.08</size></box></geometry><material><ambient>0.10 0.11 0.12 1</ambient><diffuse>0.16 0.17 0.18 1</diffuse></material></visual>
+        <visual name="fork_left"><pose>0.63 0.18 -0.20 0 0 0</pose><geometry><box><size>0.75 0.07 0.06</size></box></geometry><material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material></visual>
+        <visual name="fork_right"><pose>0.63 -0.18 -0.20 0 0 0</pose><geometry><box><size>0.75 0.07 0.06</size></box></geometry><material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material></visual>
+        <visual name="lidar"><pose>0.30 0 0.40 0 0 0</pose><geometry><cylinder><radius>0.15</radius><length>0.14</length></cylinder></geometry><material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.02 0.02 0.02 1</diffuse></material></visual>
+        {''.join(lidar_visuals)}
+      </link>
+    </model>""")
+    models.append(model_box("cargo_item", -7.0, -5.0, HIDDEN_Z, 0.42, 0.34, 0.30, "producty", static=False))
+    models.append(model_box("delivered_item", -8.0, 4.0, HIDDEN_Z, 0.46, 0.38, 0.30, "productg", static=False))
+
+    WORLD.write_text(
+        f"""<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="warehouse_mobile">
+    <physics name="1ms" type="ignored"><max_step_size>0.01</max_step_size><real_time_factor>1.0</real_time_factor></physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <scene><ambient>0.66 0.66 0.66 1</ambient><background>0.04 0.05 0.06 1</background></scene>
+    <gui fullscreen="1"><camera name="nav2_detailed_overview"><pose>0 -8 17 0 1.05 1.5708</pose><view_controller>orbit</view_controller><projection_type>perspective</projection_type></camera></gui>
+    <light type="directional" name="sun"><cast_shadows>true</cast_shadows><pose>0 0 10 0 0 0</pose><diffuse>0.9 0.9 0.85 1</diffuse><direction>-0.35 0.2 -0.9</direction></light>
+    {''.join(models)}
+  </world>
+</sdf>
+""",
+        encoding="utf-8",
+    )
 
 
 def motor_command(linear, angular, wheel_angles, dt):
@@ -895,6 +1071,7 @@ def main():
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     generate_nav2_files()
+    write_detailed_world()
     pose = Pose2D(-7.0, -5.0, 0.0)
     wheel_angles = {"front_left": 0.0, "rear_left": 0.0, "front_right": 0.0, "rear_right": 0.0}
     telemetry = RosTelemetry()
@@ -907,6 +1084,7 @@ def main():
 
     print("Starting warehouse Nav2 task mode")
     print("Generated Nav2 map/keepout files in /workspace/aic_results/nav2_warehouse_map")
+    print(f"Generated detailed Gazebo world: {WORLD}")
     print("Use the Map Task window to set keepout zones and send TaskGoal.")
 
     gz = launch_gazebo(env)
